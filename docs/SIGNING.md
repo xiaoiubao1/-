@@ -2,6 +2,17 @@
 
 随心记 v1.2.0 开始，公开 APK 使用固定 Release 签名。私钥不会提交到公开仓库。
 
+## 为什么不能去掉私钥
+
+Android 的“无需卸载直接升级”不是只看包名。系统要求：
+
+1. 新旧 APK 的 `applicationId` 相同；
+2. 新版 APK 必须由与旧正式版相同的签名密钥签名。
+
+**私钥**负责给每一个正式 APK 签名，必须保密；**公钥/证书信息**用于让 Android 验证签名，可以公开。只有公钥无法给新版 APK 签名，因此如果不保留固定私钥，就无法长期保证覆盖升级。
+
+第一次从旧 Debug 签名切换到正式签名时可能需要卸载一次；从第一版正式签名 APK 开始，只要一直使用同一把密钥，后续版本就可以直接覆盖升级。
+
 ## GitHub Secret
 
 仓库需要一个 Actions Secret：
@@ -30,15 +41,15 @@ GitHub 仓库 → **Settings** → **Secrets and variables** → **Actions** →
 
 ## 发布保护
 
-`.github/workflows/android-build.yml` 对主分支有保护：
+`.github/workflows/android-build.yml` 对发布流程有保护：
 
-- PR 只构建 Debug APK，用于代码验证
+- PR 自动生成一次性测试签名，实际执行 `assembleRelease` 与 `apksigner verify`，验证完整 Release 签名链路，但不会读取正式私钥
 - main 必须存在 `ANDROID_SIGNING_BUNDLE`
-- main 使用 `assembleRelease`
+- main 使用固定正式密钥执行 `assembleRelease`
 - 发布前运行 `apksigner verify --verbose --print-certs`
 - 缺少签名 Secret 时工作流会失败，并且不会创建新的 GitHub Release
 
-这样可以避免 Debug / 未签名 APK 意外成为网站公开下载的最新版。
+这样可以避免 Debug、未签名或错误签名 APK 意外成为网站公开下载的最新版。
 
 ## 当前签名证书指纹
 
