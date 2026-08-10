@@ -8,5 +8,7 @@ data class Course(
     val dayOfWeek: Int = 1,
     val startMinute: Int = 8 * 60,
     val endMinute: Int = 9 * 60,
-    val note: String = ""
+    val note: String = "",
+    val reminderEnabled: Boolean = false,
+    val reminderMinutesBefore: Int = 10
 )
