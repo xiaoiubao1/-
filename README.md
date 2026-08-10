@@ -13,7 +13,7 @@
 - 🔒 **离线优先**：数据保存在手机本地 SQLite，不要求登录、不上传服务器
 - 📱 **Android 13+ 通知权限**：只有真正使用提醒功能时才申请通知权限
 - 🔗 **通知直达事件**：点击提醒通知后会直接打开对应记录
-- 🛠️ **GitHub Actions 自动构建**：推送到 `main` 后自动生成 Debug APK Artifact
+- 🛠️ **GitHub Actions 自动构建与发布**：推送到 `main` 后自动构建 APK，并创建新的 GitHub Release
 
 ## 技术栈
 
@@ -38,16 +38,42 @@
 
 首次为某条记录打开“到点通知”时，Android 13 及以上系统会请求通知权限。
 
-## 直接获取 APK
+## 公开下载最新版 APK
 
-仓库已经配置 GitHub Actions：
+每次有代码推送到 `main`，GitHub Actions 会自动：
 
-1. 打开仓库的 **Actions**。
-2. 进入最新一次 **Android Build**。
-3. 在 **Artifacts** 下载 `suixinji-debug-apk`。
-4. 解压得到 `app-debug.apk`，安装到安卓手机即可测试。
+1. 构建 Android Debug APK。
+2. 将 APK 固定重命名为 `suixinji.apk`。
+3. 生成 SHA-256 校验文件 `suixinji.apk.sha256`。
+4. 创建一个新的 GitHub Release。
+5. 把 APK 和校验文件上传到该 Release。
 
-> Debug APK 适合自己测试使用。正式发布到应用商店前建议增加签名、版本管理、隐私说明和 Release 构建流程。
+### 永久固定下载地址
+
+网站、博客或下载页都可以一直使用下面这个地址，不需要随着版本更新修改：
+
+```text
+https://github.com/xiaoiubao1/-/releases/latest/download/suixinji.apk
+```
+
+GitHub 会自动把这个地址指向最新一次 Release 中的 `suixinji.apk`。
+
+### 网站下载按钮示例
+
+```html
+<a href="https://github.com/xiaoiubao1/-/releases/latest/download/suixinji.apk"
+   style="display:inline-block;padding:14px 24px;border-radius:12px;text-decoration:none;font-weight:700;">
+  📱 下载随心记 Android 版
+</a>
+```
+
+手机用户点击按钮后会直接下载 `suixinji.apk`。下载完成后点击 APK 安装；如果 Android 提示不允许安装未知来源应用，需要按系统提示允许当前浏览器或文件管理器安装应用。
+
+> 当前公开下载的是 GitHub 自动签名的 Debug APK，适合测试、自用和公开体验。正式上架应用商店前建议增加独立 Release 签名、版本管理、隐私政策和正式发布流程。
+
+## Actions Artifact
+
+除了 Release，构建流程仍然会保留 `suixinji-debug-apk` Artifact，方便开发时检查构建产物。普通用户和公开网站建议直接使用上面的 Release 固定下载地址。
 
 ## 提醒机制说明
 
