@@ -32,12 +32,14 @@ GitHub Actions 会在临时 Runner 中解码私钥，只在当前构建使用；
 
 ## 配置位置
 
-GitHub 仓库 → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**：
+GitHub 仓库 → **Settings** → **Secrets and variables** → **Actions**：
 
-- Name：`ANDROID_SIGNING_BUNDLE`
-- Secret：粘贴签名包文本的完整内容
+- Secret 名称：`ANDROID_SIGNING_BUNDLE`
+- Secret 内容：粘贴签名包文本的完整内容
 
-配置完成后，可以重新运行主分支工作流，或者让新的提交触发构建。
+如果 Secret 已存在，点击它后选择 **Update secret**，不要新建第二个同名 Secret。
+
+工作流会自动去除复制时混入的空格/换行并补齐 Base64 padding；如果内容确实被截断，则会明确提示重新复制完整签名包。
 
 ## 发布保护
 
@@ -47,15 +49,17 @@ GitHub 仓库 → **Settings** → **Secrets and variables** → **Actions** →
 - main 必须存在 `ANDROID_SIGNING_BUNDLE`
 - main 使用固定正式密钥执行 `assembleRelease`
 - 发布前运行 `apksigner verify --verbose --print-certs`
-- 缺少签名 Secret 时工作流会失败，并且不会创建新的 GitHub Release
+- 缺少或损坏签名 Secret 时工作流会失败，并且不会创建新的 GitHub Release
 
 这样可以避免 Debug、未签名或错误签名 APK 意外成为网站公开下载的最新版。
 
-## 当前签名证书指纹
+## 当前正式签名证书指纹
+
+> 2026-08-10：在首个正式签名 Release 尚未成功发布前轮换密钥，废弃先前因复制错误/部分泄露的签名包。以下指纹为之后需要永久保持一致的新正式密钥。
 
 ```text
-SHA-1   81:2F:02:B8:91:7C:5C:5D:F7:4B:A4:BD:58:66:95:60:DC:44:4F:61
-SHA-256 BD:53:B2:77:BE:3E:16:1B:96:58:EC:C3:FC:7F:24:39:09:E5:DA:CC:5E:DC:67:64:C6:BB:2C:82:43:EE:20:41
+SHA-1   6B:F7:88:C6:6E:59:7A:6A:C5:2E:9F:7C:2A:A8:39:31:BA:BD:1A:B3
+SHA-256 9F:88:EF:FE:F2:E7:70:29:B9:AD:FC:24:FC:4F:EA:4A:25:8B:37:17:0B:A0:BD:CD:AD:5A:D5:F3:65:87:19:76
 ```
 
 证书指纹可以公开，但 `.jks`、密码和 `ANDROID_SIGNING_BUNDLE` 必须保密。
