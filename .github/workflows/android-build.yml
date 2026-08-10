@@ -35,7 +35,28 @@ jobs:
         with:
           gradle-version: "8.13"
 
-      - name: Decode release signing bundle
+      - name: Generate temporary PR signing key
+        if: github.event_name == 'pull_request'
+        run: |
+          TEST_STORE="$RUNNER_TEMP/ci-test-release.jks"
+          keytool -genkeypair \
+            -keystore "$TEST_STORE" \
+            -storetype JKS \
+            -storepass ci-test-store-password \
+            -keypass ci-test-key-password \
+            -alias ci-test-release \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 30 \
+            -dname "CN=Suixinji CI Test, O=GitHub Actions, C=US"
+          {
+            echo "ANDROID_KEYSTORE_PATH=$TEST_STORE"
+            echo "ANDROID_STORE_PASSWORD=ci-test-store-password"
+            echo "ANDROID_KEY_ALIAS=ci-test-release"
+            echo "ANDROID_KEY_PASSWORD=ci-test-key-password"
+          } >> "$GITHUB_ENV"
+
+      - name: Decode production release signing bundle
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           ANDROID_SIGNING_BUNDLE: ${{ secrets.ANDROID_SIGNING_BUNDLE }}
@@ -62,32 +83,22 @@ jobs:
                   env.write(f"{key}={value}\n")
           PY
 
-      - name: Build debug APK for pull request
-        if: github.event_name == 'pull_request'
-        run: gradle :app:assembleDebug --stacktrace
-
       - name: Build signed release APK
-        if: github.event_name != 'pull_request'
         run: gradle :app:assembleRelease --stacktrace
 
       - name: Prepare APK
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            cp app/build/outputs/apk/debug/app-debug.apk suixinji.apk
-          else
-            cp app/build/outputs/apk/release/app-release.apk suixinji.apk
-          fi
+          cp app/build/outputs/apk/release/app-release.apk suixinji.apk
           sha256sum suixinji.apk > suixinji.apk.sha256
 
       - name: Verify release signature
-        if: github.event_name != 'pull_request'
         run: |
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs suixinji.apk | tee suixinji.apk.cert.txt
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event_name == 'pull_request' && 'suixinji-debug-apk' || 'suixinji-release-apk' }}
+          name: ${{ github.event_name == 'pull_request' && 'suixinji-ci-release-apk' || 'suixinji-release-apk' }}
           path: |
             suixinji.apk
             suixinji.apk.sha256
