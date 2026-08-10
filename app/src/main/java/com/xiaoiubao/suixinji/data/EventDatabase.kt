@@ -19,7 +19,7 @@ class EventDatabase(context: Context) :
             db.execSQL("ALTER TABLE events ADD COLUMN image_uri TEXT NOT NULL DEFAULT ''")
             createCoursesTable(db)
         }
-        if (oldVersion < 3) {
+        if (oldVersion >= 2 && oldVersion < 3) {
             db.execSQL("ALTER TABLE courses ADD COLUMN reminder_enabled INTEGER NOT NULL DEFAULT 0")
             db.execSQL("ALTER TABLE courses ADD COLUMN reminder_minutes_before INTEGER NOT NULL DEFAULT 10")
         }
