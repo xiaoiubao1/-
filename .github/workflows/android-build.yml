@@ -62,15 +62,37 @@ jobs:
           ANDROID_SIGNING_BUNDLE: ${{ secrets.ANDROID_SIGNING_BUNDLE }}
         run: |
           if [ -z "$ANDROID_SIGNING_BUNDLE" ]; then
-            echo "::error::Missing repository secret ANDROID_SIGNING_BUNDLE. Release publishing is intentionally blocked so an unsigned/debug APK cannot replace the public release."
+            echo "::error::Missing repository secret ANDROID_SIGNING_BUNDLE. Release publishing is intentionally blocked."
             exit 1
           fi
           python3 - <<'PY'
-          import base64, json, os, pathlib
-          raw = base64.b64decode(os.environ["ANDROID_SIGNING_BUNDLE"])
-          data = json.loads(raw.decode("utf-8"))
+          import base64, binascii, json, os, pathlib, sys
+
+          def decode_b64(label: str, value: str) -> bytes:
+              normalized = "".join(value.split())
+              normalized += "=" * (-len(normalized) % 4)
+              try:
+                  return base64.b64decode(normalized, validate=True)
+              except (binascii.Error, ValueError) as exc:
+                  print(f"::error::{label} is not valid Base64. Re-copy the complete signing bundle without truncation: {exc}")
+                  sys.exit(1)
+
+          outer = decode_b64("ANDROID_SIGNING_BUNDLE", os.environ["ANDROID_SIGNING_BUNDLE"])
+          try:
+              data = json.loads(outer.decode("utf-8"))
+          except Exception as exc:
+              print(f"::error::ANDROID_SIGNING_BUNDLE decoded, but its JSON payload is invalid: {exc}")
+              sys.exit(1)
+
+          required = ("keystore", "storePassword", "keyAlias", "keyPassword")
+          missing = [key for key in required if not data.get(key)]
+          if missing:
+              print(f"::error::Signing bundle is missing required fields: {', '.join(missing)}")
+              sys.exit(1)
+
           target = pathlib.Path(os.environ["RUNNER_TEMP"]) / "suixinji-release.jks"
-          target.write_bytes(base64.b64decode(data["keystore"]))
+          target.write_bytes(decode_b64("embedded keystore", data["keystore"]))
+
           values = {
               "ANDROID_KEYSTORE_PATH": str(target),
               "ANDROID_STORE_PASSWORD": data["storePassword"],
