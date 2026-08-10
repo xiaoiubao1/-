@@ -83,7 +83,7 @@ class BackupService(private val context: Context) {
                     put("title", event.title)
                     put("details", event.details)
                     put("location", event.location)
-                    if (event.eventTime == null) put(JSONObject.NULL, JSONObject.NULL) else put("eventTime", event.eventTime)
+                    put("eventTime", event.eventTime ?: JSONObject.NULL)
                     put("reminderEnabled", event.reminderEnabled)
                     put("completed", event.completed)
                     put("createdAt", event.createdAt)
@@ -117,13 +117,9 @@ class BackupService(private val context: Context) {
                 zip.write(root.toString(2).toByteArray(Charsets.UTF_8))
                 zip.closeEntry()
 
-                if (wallpaperEntry.isNotBlank()) {
-                    copyUriToZip(wallpaper, wallpaperEntry, zip)
-                }
+                if (wallpaperEntry.isNotBlank()) copyUriToZip(wallpaper, wallpaperEntry, zip)
                 events.forEachIndexed { index, event ->
-                    if (event.imageUri.isNotBlank()) {
-                        copyUriToZip(event.imageUri, "media/event_$index.bin", zip)
-                    }
+                    if (event.imageUri.isNotBlank()) copyUriToZip(event.imageUri, "media/event_$index.bin", zip)
                 }
             }
         } ?: error("无法创建备份文件")
@@ -163,8 +159,12 @@ class BackupService(private val context: Context) {
             val events = buildList {
                 for (i in 0 until eventsJson.length()) {
                     val item = eventsJson.getJSONObject(i)
-                    val imageEntry = item.optString("imageEntry")
-                    val restoredImage = restoreMedia(tempDir, imageEntry, restoredMediaDir, "event-$i")
+                    val restoredImage = restoreMedia(
+                        tempDir,
+                        item.optString("imageEntry"),
+                        restoredMediaDir,
+                        "event-$i"
+                    )
                     add(
                         EventNote(
                             title = item.optString("title"),
@@ -211,14 +211,12 @@ class BackupService(private val context: Context) {
                 settings.wallpaper = when (settingsJson.optString("wallpaper")) {
                     AppSettings.WALLPAPER_NONE -> AppSettings.WALLPAPER_NONE
                     AppSettings.WALLPAPER_BUILTIN -> AppSettings.WALLPAPER_BUILTIN
-                    "custom" -> {
-                        restoreMedia(
-                            tempDir,
-                            settingsJson.optString("wallpaperEntry"),
-                            restoredMediaDir,
-                            "wallpaper"
-                        ).ifBlank { AppSettings.WALLPAPER_BUILTIN }
-                    }
+                    "custom" -> restoreMedia(
+                        tempDir,
+                        settingsJson.optString("wallpaperEntry"),
+                        restoredMediaDir,
+                        "wallpaper"
+                    ).ifBlank { AppSettings.WALLPAPER_BUILTIN }
                     else -> AppSettings.WALLPAPER_BUILTIN
                 }
             }
@@ -230,10 +228,14 @@ class BackupService(private val context: Context) {
     }
 
     private fun copyUriToZip(uriString: String, entryName: String, zip: ZipOutputStream) {
-        runCatching {
-            context.contentResolver.openInputStream(Uri.parse(uriString))?.use { input ->
-                zip.putNextEntry(ZipEntry(entryName))
-                input.copyTo(zip)
+        val input = runCatching {
+            context.contentResolver.openInputStream(Uri.parse(uriString))
+        }.getOrNull() ?: return
+        input.use {
+            zip.putNextEntry(ZipEntry(entryName))
+            try {
+                it.copyTo(zip)
+            } finally {
                 zip.closeEntry()
             }
         }
