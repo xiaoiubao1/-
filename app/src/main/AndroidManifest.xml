@@ -5,19 +5,67 @@
 
     <application
         android:allowBackup="true"
-        android:icon="@drawable/app_icon"
+        android:icon="@drawable/launcher_icon_calendar"
         android:label="随心记"
-        android:roundIcon="@drawable/app_icon"
+        android:roundIcon="@drawable/launcher_icon_calendar"
         android:supportsRtl="true"
         android:theme="@style/Theme.Suixinji">
+
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true" />
+
+        <activity-alias
+            android:name=".LauncherCalendar"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@drawable/launcher_icon_calendar"
+            android:label="随心记"
+            android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-        </activity>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".LauncherCheck"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@drawable/launcher_icon_check"
+            android:label="随心记"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".LauncherGrid"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@drawable/launcher_icon_grid"
+            android:label="随心记"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".LauncherNote"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@drawable/launcher_icon_note"
+            android:label="随心记"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
 
         <receiver
             android:name=".widget.EventWidgetProvider"

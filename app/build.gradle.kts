@@ -14,8 +14,34 @@ android {
         applicationId = "com.xiaoiubao.suixinji"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.2.0"
+    }
+
+    val releaseStorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+    val releaseStorePassword = System.getenv("ANDROID_STORE_PASSWORD")
+    val releaseKeyAlias = System.getenv("ANDROID_KEY_ALIAS")
+    val releaseKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+
+    val releaseSigning = if (
+        !releaseStorePath.isNullOrBlank() &&
+        !releaseStorePassword.isNullOrBlank() &&
+        !releaseKeyAlias.isNullOrBlank() &&
+        !releaseKeyPassword.isNullOrBlank()
+    ) {
+        signingConfigs.create("release") {
+            storeFile = file(releaseStorePath)
+            storePassword = releaseStorePassword
+            keyAlias = releaseKeyAlias
+            keyPassword = releaseKeyPassword
+        }
+    } else null
+
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = false
+            signingConfig = releaseSigning
+        }
     }
 
     buildFeatures {
