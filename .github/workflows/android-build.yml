@@ -132,12 +132,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="v1.2.0-build-${GITHUB_RUN_NUMBER}"
+          TAG="v1.3.0-build-${GITHUB_RUN_NUMBER}"
           gh release create "$TAG" \
             suixinji.apk \
             suixinji.apk.sha256 \
             suixinji.apk.cert.txt \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "随心记 v1.2.0 · 正式签名构建 #${GITHUB_RUN_NUMBER}" \
-            --notes "正式签名版。新增完整备份/恢复、CSV 导出和课程开始提醒。\n\n固定下载地址：\nhttps://github.com/${GITHUB_REPOSITORY}/releases/latest/download/suixinji.apk"
+            --title "随心记 v1.3.0 · 正式签名构建 #${GITHUB_RUN_NUMBER}" \
+            --notes "v1.3.0 正式签名版：新增桌面小组件 DIY、紧凑一屏周课表，并使用统一角色 APP 图标。\n\n固定下载地址：\nhttps://github.com/${GITHUB_REPOSITORY}/releases/latest/download/suixinji.apk"
