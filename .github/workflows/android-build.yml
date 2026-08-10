@@ -35,21 +35,63 @@ jobs:
         with:
           gradle-version: "8.13"
 
-      - name: Build debug APK
+      - name: Decode release signing bundle
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          ANDROID_SIGNING_BUNDLE: ${{ secrets.ANDROID_SIGNING_BUNDLE }}
+        run: |
+          if [ -z "$ANDROID_SIGNING_BUNDLE" ]; then
+            echo "::error::Missing repository secret ANDROID_SIGNING_BUNDLE. Release publishing is intentionally blocked so an unsigned/debug APK cannot replace the public release."
+            exit 1
+          fi
+          python3 - <<'PY'
+          import base64, json, os, pathlib
+          raw = base64.b64decode(os.environ["ANDROID_SIGNING_BUNDLE"])
+          data = json.loads(raw.decode("utf-8"))
+          target = pathlib.Path(os.environ["RUNNER_TEMP"]) / "suixinji-release.jks"
+          target.write_bytes(base64.b64decode(data["keystore"]))
+          values = {
+              "ANDROID_KEYSTORE_PATH": str(target),
+              "ANDROID_STORE_PASSWORD": data["storePassword"],
+              "ANDROID_KEY_ALIAS": data["keyAlias"],
+              "ANDROID_KEY_PASSWORD": data["keyPassword"],
+          }
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              for key, value in values.items():
+                  print(f"::add-mask::{value}")
+                  env.write(f"{key}={value}\n")
+          PY
+
+      - name: Build debug APK for pull request
+        if: github.event_name == 'pull_request'
         run: gradle :app:assembleDebug --stacktrace
 
-      - name: Prepare public APK
+      - name: Build signed release APK
+        if: github.event_name != 'pull_request'
+        run: gradle :app:assembleRelease --stacktrace
+
+      - name: Prepare APK
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk suixinji.apk
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            cp app/build/outputs/apk/debug/app-debug.apk suixinji.apk
+          else
+            cp app/build/outputs/apk/release/app-release.apk suixinji.apk
+          fi
           sha256sum suixinji.apk > suixinji.apk.sha256
+
+      - name: Verify release signature
+        if: github.event_name != 'pull_request'
+        run: |
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs suixinji.apk | tee suixinji.apk.cert.txt
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: suixinji-debug-apk
+          name: ${{ github.event_name == 'pull_request' && 'suixinji-debug-apk' || 'suixinji-release-apk' }}
           path: |
             suixinji.apk
             suixinji.apk.sha256
+            suixinji.apk.cert.txt
           if-no-files-found: error
 
       - name: Publish GitHub Release
@@ -57,11 +99,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="build-${GITHUB_RUN_NUMBER}"
+          TAG="v1.2.0-build-${GITHUB_RUN_NUMBER}"
           gh release create "$TAG" \
             suixinji.apk \
             suixinji.apk.sha256 \
+            suixinji.apk.cert.txt \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "随心记 自动构建 #${GITHUB_RUN_NUMBER}" \
-            --notes "这是由 GitHub Actions 从 main 分支自动构建的最新版 Android APK。\n\n网站固定下载地址：\nhttps://github.com/${GITHUB_REPOSITORY}/releases/latest/download/suixinji.apk"
+            --title "随心记 v1.2.0 · 正式签名构建 #${GITHUB_RUN_NUMBER}" \
+            --notes "正式签名版。新增完整备份/恢复、CSV 导出和课程开始提醒。\n\n固定下载地址：\nhttps://github.com/${GITHUB_REPOSITORY}/releases/latest/download/suixinji.apk"
