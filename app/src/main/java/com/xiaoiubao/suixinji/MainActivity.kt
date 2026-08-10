@@ -14,7 +14,7 @@ class MainActivity : ComponentActivity() {
         viewModel.refresh()
 
         setContent {
-            SuixinjiRoot(
+            SuixinjiRootV13(
                 viewModel = viewModel,
                 targetEventId = intent.getLongExtra(EXTRA_EVENT_ID, 0L),
                 targetCourseId = intent.getLongExtra(EXTRA_COURSE_ID, 0L),
