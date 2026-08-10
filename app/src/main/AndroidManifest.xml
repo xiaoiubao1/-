@@ -21,7 +21,6 @@
             android:exported="true"
             android:icon="@drawable/launcher_icon_calendar"
             android:label="随心记"
-            android:roundIcon="@drawable/launcher_icon_calendar"
             android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -35,7 +34,6 @@
             android:exported="true"
             android:icon="@drawable/launcher_icon_check"
             android:label="随心记"
-            android:roundIcon="@drawable/launcher_icon_check"
             android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -49,7 +47,6 @@
             android:exported="true"
             android:icon="@drawable/launcher_icon_grid"
             android:label="随心记"
-            android:roundIcon="@drawable/launcher_icon_grid"
             android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -63,7 +60,6 @@
             android:exported="true"
             android:icon="@drawable/launcher_icon_note"
             android:label="随心记"
-            android:roundIcon="@drawable/launcher_icon_note"
             android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
