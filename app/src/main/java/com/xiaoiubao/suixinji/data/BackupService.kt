@@ -3,6 +3,8 @@ package com.xiaoiubao.suixinji.data
 import android.content.Context
 import android.net.Uri
 import com.xiaoiubao.suixinji.settings.AppSettings
+import com.xiaoiubao.suixinji.settings.BackgroundStyle
+import com.xiaoiubao.suixinji.settings.IconStyle
 import com.xiaoiubao.suixinji.settings.ThemePreset
 import org.json.JSONArray
 import org.json.JSONObject
@@ -51,26 +53,22 @@ class BackupService(private val context: Context) {
         val courses = db.getCourses()
         val root = JSONObject().apply {
             put("format", "suixinji-backup")
-            put("version", 1)
+            put("version", 2)
             put("createdAt", System.currentTimeMillis())
         }
 
         val wallpaper = settings.wallpaper
-        val wallpaperEntry = if (
-            wallpaper.isNotBlank() &&
-            wallpaper != AppSettings.WALLPAPER_NONE &&
-            wallpaper != AppSettings.WALLPAPER_BUILTIN
-        ) "media/wallpaper.bin" else ""
+        val wallpaperEntry = if (wallpaper.isNotBlank()) "media/wallpaper.bin" else ""
 
         root.put(
             "settings",
             JSONObject().apply {
                 put("theme", settings.theme.name)
-                put("wallpaper", when (wallpaper) {
-                    AppSettings.WALLPAPER_NONE -> AppSettings.WALLPAPER_NONE
-                    AppSettings.WALLPAPER_BUILTIN -> AppSettings.WALLPAPER_BUILTIN
-                    else -> "custom"
-                })
+                put("backgroundStyle", settings.backgroundStyle.name)
+                put("customBackgroundEnabled", settings.customBackgroundEnabled)
+                put("glassStrength", settings.glassStrength.toDouble())
+                put("iconStyle", settings.iconStyle.name)
+                put("wallpaper", if (wallpaperEntry.isNotBlank()) "custom" else "none")
                 put("wallpaperEntry", wallpaperEntry)
             }
         )
@@ -208,17 +206,31 @@ class BackupService(private val context: Context) {
                     ThemePreset.valueOf(settingsJson.optString("theme", ThemePreset.CREAM.name))
                 }.getOrDefault(ThemePreset.CREAM)
 
-                settings.wallpaper = when (settingsJson.optString("wallpaper")) {
-                    AppSettings.WALLPAPER_NONE -> AppSettings.WALLPAPER_NONE
-                    AppSettings.WALLPAPER_BUILTIN -> AppSettings.WALLPAPER_BUILTIN
-                    "custom" -> restoreMedia(
+                settings.backgroundStyle = runCatching {
+                    BackgroundStyle.valueOf(
+                        settingsJson.optString("backgroundStyle", BackgroundStyle.LIGHT.name)
+                    )
+                }.getOrDefault(BackgroundStyle.LIGHT)
+
+                settings.glassStrength = settingsJson.optDouble("glassStrength", 0.60).toFloat()
+                    .coerceIn(0f, 1f)
+
+                settings.iconStyle = runCatching {
+                    IconStyle.valueOf(settingsJson.optString("iconStyle", IconStyle.CALENDAR.name))
+                }.getOrDefault(IconStyle.CALENDAR)
+
+                val restoredWallpaper = if (settingsJson.optString("wallpaper") == "custom") {
+                    restoreMedia(
                         tempDir,
                         settingsJson.optString("wallpaperEntry"),
                         restoredMediaDir,
                         "wallpaper"
-                    ).ifBlank { AppSettings.WALLPAPER_BUILTIN }
-                    else -> AppSettings.WALLPAPER_BUILTIN
-                }
+                    )
+                } else ""
+                settings.wallpaper = restoredWallpaper
+                settings.customBackgroundEnabled =
+                    settingsJson.optBoolean("customBackgroundEnabled", restoredWallpaper.isNotBlank()) &&
+                    restoredWallpaper.isNotBlank()
             }
 
             return "恢复完成：${events.size} 条记录、${courses.size} 门课程"
