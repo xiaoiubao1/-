@@ -8,5 +8,6 @@ data class EventNote(
     val eventTime: Long? = null,
     val reminderEnabled: Boolean = false,
     val completed: Boolean = false,
+    val imageUri: String = "",
     val createdAt: Long = System.currentTimeMillis()
 )

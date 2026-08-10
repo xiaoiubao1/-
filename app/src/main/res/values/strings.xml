@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">随心记</string>
+    <string name="widget_description">显示下一条待办和今天下一节课程</string>
+</resources>
