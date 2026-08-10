@@ -103,8 +103,10 @@ import com.xiaoiubao.suixinji.reminder.NotificationTester
 import com.xiaoiubao.suixinji.settings.AppSettings
 import com.xiaoiubao.suixinji.settings.ThemePreset
 import java.text.DateFormat
+import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     private val viewModel by viewModels<MainViewModel>()
@@ -113,12 +115,14 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         viewModel.refresh()
         val targetEventId = intent.getLongExtra(EXTRA_EVENT_ID, 0L)
+        val targetCourseId = intent.getLongExtra(EXTRA_COURSE_ID, 0L)
         val settings = AppSettings(this)
 
         setContent {
             SuixinjiApp(
                 viewModel = viewModel,
                 targetEventId = targetEventId,
+                targetCourseId = targetCourseId,
                 settings = settings
             )
         }
@@ -126,6 +130,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_EVENT_ID = "extra_event_id"
+        const val EXTRA_COURSE_ID = "extra_course_id"
     }
 }
 
@@ -135,20 +140,23 @@ private enum class MainSection { NOTES, TIMETABLE, SETTINGS }
 private fun SuixinjiApp(
     viewModel: MainViewModel,
     targetEventId: Long,
+    targetCourseId: Long,
     settings: AppSettings
 ) {
     val context = LocalContext.current
     val events by viewModel.events.collectAsState()
     val courses by viewModel.courses.collectAsState()
-    val importMessage by viewModel.importMessage.collectAsState()
+    val operationMessage by viewModel.importMessage.collectAsState()
 
     var section by remember { mutableStateOf(MainSection.NOTES) }
     var editingEvent by remember { mutableStateOf<EventNote?>(null) }
     var editingCourse by remember { mutableStateOf<Course?>(null) }
     var theme by remember { mutableStateOf(settings.theme) }
     var wallpaper by remember { mutableStateOf(settings.wallpaper) }
-    var handledTarget by remember(targetEventId) { mutableStateOf(false) }
+    var handledEventTarget by remember(targetEventId) { mutableStateOf(false) }
+    var handledCourseTarget by remember(targetCourseId) { mutableStateOf(false) }
     var pendingNotificationTest by remember { mutableStateOf(false) }
+    var pendingRestoreUri by remember { mutableStateOf<Uri?>(null) }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -176,13 +184,47 @@ private fun SuixinjiApp(
         }
     }
 
+    val csvExporter = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri -> uri?.let(viewModel::exportCsv) }
+
+    val backupExporter = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri -> uri?.let(viewModel::createBackup) }
+
+    val backupRestorer = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let {
+            persistReadPermission(context, it)
+            pendingRestoreUri = it
+        }
+    }
+
     LaunchedEffect(events, targetEventId) {
-        if (!handledTarget && targetEventId > 0 && events.isNotEmpty()) {
+        if (!handledEventTarget && targetEventId > 0 && events.isNotEmpty()) {
             events.firstOrNull { it.id == targetEventId }?.let {
                 section = MainSection.NOTES
                 editingEvent = it
-                handledTarget = true
+                handledEventTarget = true
             }
+        }
+    }
+
+    LaunchedEffect(courses, targetCourseId) {
+        if (!handledCourseTarget && targetCourseId > 0 && courses.isNotEmpty()) {
+            courses.firstOrNull { it.id == targetCourseId }?.let {
+                section = MainSection.TIMETABLE
+                editingCourse = it
+                handledCourseTarget = true
+            }
+        }
+    }
+
+    LaunchedEffect(operationMessage) {
+        if (operationMessage?.startsWith("恢复完成") == true) {
+            theme = settings.theme
+            wallpaper = settings.wallpaper
         }
     }
 
@@ -267,6 +309,9 @@ private fun SuixinjiApp(
                             onImport = {
                                 importPicker.launch(arrayOf("text/csv", "application/json", "text/plain", "*/*"))
                             },
+                            onExportCsv = { csvExporter.launch("suixinji-events-${todayStamp()}.csv") },
+                            onBackup = { backupExporter.launch("suixinji-backup-${todayStamp()}.suixinji") },
+                            onRestore = { backupRestorer.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) },
                             onTestNotification = {
                                 if (NotificationTester.canNotify(context)) {
                                     NotificationTester.send(context)
@@ -287,14 +332,7 @@ private fun SuixinjiApp(
             note = note,
             onDismiss = { editingEvent = null },
             onSave = { updated ->
-                if (
-                    updated.reminderEnabled &&
-                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
-                    android.content.pm.PackageManager.PERMISSION_GRANTED
-                ) {
-                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                }
+                requestNotificationPermissionIfNeeded(context, updated.reminderEnabled, notificationPermissionLauncher)
                 viewModel.save(updated)
                 editingEvent = null
             }
@@ -305,20 +343,38 @@ private fun SuixinjiApp(
         CourseEditorDialog(
             course = course,
             onDismiss = { editingCourse = null },
-            onSave = {
-                viewModel.saveCourse(it)
+            onSave = { updated ->
+                requestNotificationPermissionIfNeeded(context, updated.reminderEnabled, notificationPermissionLauncher)
+                viewModel.saveCourse(updated)
                 editingCourse = null
             }
         )
     }
 
-    importMessage?.let { message ->
+    pendingRestoreUri?.let { uri ->
+        AlertDialog(
+            onDismissRequest = { pendingRestoreUri = null },
+            title = { Text("恢复完整备份？") },
+            text = { Text("恢复会用备份中的记录、课程、主题和可读取的图片覆盖当前数据。建议先导出一份完整备份。") },
+            dismissButton = {
+                TextButton(onClick = { pendingRestoreUri = null }) { Text("取消") }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    pendingRestoreUri = null
+                    viewModel.restoreBackup(uri)
+                }) { Text("覆盖并恢复") }
+            }
+        )
+    }
+
+    operationMessage?.let { message ->
         AlertDialog(
             onDismissRequest = viewModel::clearImportMessage,
             confirmButton = {
                 TextButton(onClick = viewModel::clearImportMessage) { Text("知道了") }
             },
-            title = { Text("导入结果") },
+            title = { Text("操作结果") },
             text = { Text(message) }
         )
     }
@@ -357,12 +413,7 @@ private fun UriImage(
         }.getOrNull()
     }
     if (bitmap != null) {
-        Image(
-            bitmap = bitmap,
-            contentDescription = null,
-            modifier = modifier,
-            contentScale = contentScale
-        )
+        Image(bitmap = bitmap, contentDescription = null, modifier = modifier, contentScale = contentScale)
     }
 }
 
@@ -393,17 +444,10 @@ private fun NotesScreen(
         }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp)
-    ) {
+    Column(modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(16.dp))
         Text("随心记", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-        Text(
-            "记录、图片、提醒，都放在一个地方",
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        Text("记录、图片、提醒，都放在一个地方", color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(14.dp))
         OutlinedTextField(
             value = query,
@@ -435,10 +479,7 @@ private fun NotesScreen(
                 onClick = onAdd
             )
         } else {
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
+            LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 item { Spacer(Modifier.height(2.dp)) }
                 items(visibleEvents, key = { it.id }) { note ->
                     EventCard(
@@ -470,10 +511,7 @@ private fun EventCard(
             if (note.imageUri.isNotBlank()) {
                 UriImage(
                     note.imageUri,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(150.dp)
-                        .clip(RoundedCornerShape(16.dp))
+                    modifier = Modifier.fillMaxWidth().height(150.dp).clip(RoundedCornerShape(16.dp))
                 )
                 Spacer(Modifier.height(12.dp))
             }
@@ -501,7 +539,6 @@ private fun EventCard(
                 IconButton(onClick = onEdit) { Icon(Icons.Default.Edit, contentDescription = "编辑") }
                 IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, contentDescription = "删除") }
             }
-
             if (note.eventTime != null || note.location.isNotBlank() || (note.reminderEnabled && !note.completed)) {
                 Spacer(Modifier.height(8.dp))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -548,7 +585,7 @@ private fun TimetableScreen(
     Column(modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(16.dp))
         Text("课程表", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-        Text("按星期安排课程，桌面小组件也会显示今天的下一节课", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("每门课程都可以单独设置开始前提醒", color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(12.dp))
         LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             item {
@@ -588,26 +625,42 @@ private fun WeekdayChips(selectedDay: Int, onSelected: (Int) -> Unit) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CourseCard(course: Course, onEdit: () -> Unit, onDelete: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onEdit),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f))
     ) {
-        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    "${formatMinute(course.startMinute)} - ${formatMinute(course.endMinute)}",
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(course.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                val meta = listOf(course.teacher, course.location).filter { it.isNotBlank() }.joinToString(" · ")
-                if (meta.isNotBlank()) Text(meta, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (course.note.isNotBlank()) Text(course.note, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Column(Modifier.fillMaxWidth().padding(16.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "${formatMinute(course.startMinute)} - ${formatMinute(course.endMinute)}",
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(course.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    val meta = listOf(course.teacher, course.location).filter { it.isNotBlank() }.joinToString(" · ")
+                    if (meta.isNotBlank()) Text(meta, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (course.note.isNotBlank()) Text(course.note, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+                IconButton(onClick = onEdit) { Icon(Icons.Default.Edit, contentDescription = "编辑课程") }
+                IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, contentDescription = "删除课程") }
             }
-            IconButton(onClick = onEdit) { Icon(Icons.Default.Edit, contentDescription = "编辑课程") }
-            IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, contentDescription = "删除课程") }
+            if (course.reminderEnabled) {
+                Spacer(Modifier.height(8.dp))
+                AssistChip(
+                    onClick = onEdit,
+                    label = {
+                        Text(
+                            if (course.reminderMinutesBefore == 0) "上课时提醒"
+                            else "提前 ${course.reminderMinutesBefore} 分钟提醒"
+                        )
+                    },
+                    leadingIcon = { Icon(Icons.Default.Notifications, null, Modifier.size(18.dp)) }
+                )
+            }
         }
     }
 }
@@ -623,13 +676,16 @@ private fun SettingsScreen(
     onBuiltinWallpaper: () -> Unit,
     onPickWallpaper: () -> Unit,
     onImport: () -> Unit,
+    onExportCsv: () -> Unit,
+    onBackup: () -> Unit,
+    onRestore: () -> Unit,
     onTestNotification: () -> Unit
 ) {
     LazyColumn(modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Spacer(Modifier.height(16.dp))
             Text("个性化与工具", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            Text("主题、壁纸、导入和通知测试都在这里", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("主题、壁纸、通知、导入导出和完整备份都在这里", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         item {
             SettingsCard(Icons.Default.Palette, "主题") {
@@ -679,12 +735,23 @@ private fun SettingsScreen(
         }
         item {
             SettingsCard(Icons.Default.UploadFile, "导入记录") {
-                Text("支持 CSV、JSON 和 TXT。TXT 每一行会作为一条新记录；CSV 支持中英文表头。")
+                Text("继续支持 CSV、JSON 和 TXT 导入。")
                 Spacer(Modifier.height(8.dp))
                 Button(onClick = onImport) {
                     Icon(Icons.Default.UploadFile, contentDescription = null)
                     Spacer(Modifier.width(6.dp))
                     Text("选择文件导入")
+                }
+            }
+        }
+        item {
+            SettingsCard(Icons.Default.UploadFile, "导出与完整备份") {
+                Text("CSV 适合表格查看；完整备份会保存记录、课程、主题、壁纸以及能够读取到的图片附件。")
+                Spacer(Modifier.height(8.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onExportCsv) { Text("导出 CSV") }
+                    Button(onClick = onBackup) { Text("创建完整备份") }
+                    OutlinedButton(onClick = onRestore) { Text("恢复备份") }
                 }
             }
         }
@@ -803,18 +870,14 @@ private fun EventEditorDialog(
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(Modifier.height(14.dp))
-                OutlinedTextField(
-                    title, { title = it }, Modifier.fillMaxWidth(),
-                    label = { Text("事件标题 *") }, singleLine = true
-                )
+                OutlinedTextField(title, { title = it }, Modifier.fillMaxWidth(), label = { Text("事件标题 *") }, singleLine = true)
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(details, { details = it }, Modifier.fillMaxWidth(), label = { Text("详细内容") }, minLines = 3, maxLines = 6)
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
-                    details, { details = it }, Modifier.fillMaxWidth(),
-                    label = { Text("详细内容") }, minLines = 3, maxLines = 6
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    location, { location = it }, Modifier.fillMaxWidth(),
+                    location,
+                    { location = it },
+                    Modifier.fillMaxWidth(),
                     label = { Text("地点 / 位置") },
                     leadingIcon = { Icon(Icons.Default.LocationOn, contentDescription = null) },
                     singleLine = true
@@ -824,10 +887,7 @@ private fun EventEditorDialog(
                 Text("图片附件", fontWeight = FontWeight.SemiBold)
                 if (imageUri.isNotBlank()) {
                     Spacer(Modifier.height(8.dp))
-                    UriImage(
-                        imageUri,
-                        Modifier.fillMaxWidth().height(180.dp).clip(RoundedCornerShape(16.dp))
-                    )
+                    UriImage(imageUri, Modifier.fillMaxWidth().height(180.dp).clip(RoundedCornerShape(16.dp)))
                 }
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -900,6 +960,7 @@ private fun EventEditorDialog(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CourseEditorDialog(
     course: Course,
@@ -914,6 +975,8 @@ private fun CourseEditorDialog(
     var startMinute by remember(course.id) { mutableStateOf(course.startMinute) }
     var endMinute by remember(course.id) { mutableStateOf(course.endMinute) }
     var note by remember(course.id) { mutableStateOf(course.note) }
+    var reminderEnabled by remember(course.id) { mutableStateOf(course.reminderEnabled) }
+    var reminderMinutesBefore by remember(course.id) { mutableStateOf(course.reminderMinutesBefore) }
 
     fun pickMinute(current: Int, onPicked: (Int) -> Unit) {
         TimePickerDialog(
@@ -960,6 +1023,32 @@ private fun CourseEditorDialog(
                 }
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(note, { note = it }, Modifier.fillMaxWidth(), label = { Text("备注") }, minLines = 2, maxLines = 4)
+
+                Spacer(Modifier.height(14.dp))
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Notifications, null)
+                    Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("课程开始提醒", fontWeight = FontWeight.SemiBold)
+                        Text("每周按课程时间自动安排通知", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(reminderEnabled, { reminderEnabled = it })
+                }
+                if (reminderEnabled) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("提醒时间", fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(6.dp))
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf(0, 5, 10, 15, 30, 60).forEach { minutes ->
+                            FilterChip(
+                                selected = reminderMinutesBefore == minutes,
+                                onClick = { reminderMinutesBefore = minutes },
+                                label = { Text(if (minutes == 0) "上课时" else "提前${minutes}分钟") }
+                            )
+                        }
+                    }
+                }
+
                 Spacer(Modifier.height(18.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onDismiss) { Text("取消") }
@@ -974,7 +1063,9 @@ private fun CourseEditorDialog(
                                     dayOfWeek = day,
                                     startMinute = startMinute,
                                     endMinute = endMinute.coerceAtLeast(startMinute + 1).coerceAtMost(1439),
-                                    note = note.trim()
+                                    note = note.trim(),
+                                    reminderEnabled = reminderEnabled,
+                                    reminderMinutesBefore = reminderMinutesBefore
                                 )
                             )
                         },
@@ -1022,6 +1113,21 @@ private fun colorSchemeFor(theme: ThemePreset): ColorScheme = when (theme) {
     )
 }
 
+private fun requestNotificationPermissionIfNeeded(
+    context: android.content.Context,
+    enabled: Boolean,
+    launcher: androidx.activity.result.ActivityResultLauncher<String>
+) {
+    if (
+        enabled &&
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+        android.content.pm.PackageManager.PERMISSION_GRANTED
+    ) {
+        launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+}
+
 private fun persistReadPermission(context: android.content.Context, uri: Uri) {
     runCatching {
         context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -1032,6 +1138,9 @@ private fun formatTime(time: Long): String =
     DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(time))
 
 private fun formatMinute(minute: Int): String = "%02d:%02d".format(minute / 60, minute % 60)
+
+private fun todayStamp(): String =
+    SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(Date())
 
 private fun currentWeekday(): Int = when (Calendar.getInstance().get(Calendar.DAY_OF_WEEK)) {
     Calendar.MONDAY -> 1
