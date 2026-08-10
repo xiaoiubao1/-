@@ -19,6 +19,10 @@ class EventDatabase(context: Context) :
             db.execSQL("ALTER TABLE events ADD COLUMN image_uri TEXT NOT NULL DEFAULT ''")
             createCoursesTable(db)
         }
+        if (oldVersion < 3) {
+            db.execSQL("ALTER TABLE courses ADD COLUMN reminder_enabled INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE courses ADD COLUMN reminder_minutes_before INTEGER NOT NULL DEFAULT 10")
+        }
     }
 
     private fun createEventsTable(db: SQLiteDatabase) {
@@ -52,7 +56,9 @@ class EventDatabase(context: Context) :
                 day_of_week INTEGER NOT NULL,
                 start_minute INTEGER NOT NULL,
                 end_minute INTEGER NOT NULL,
-                note TEXT NOT NULL DEFAULT ''
+                note TEXT NOT NULL DEFAULT '',
+                reminder_enabled INTEGER NOT NULL DEFAULT 0,
+                reminder_minutes_before INTEGER NOT NULL DEFAULT 10
             )
             """.trimIndent()
         )
@@ -72,29 +78,7 @@ class EventDatabase(context: Context) :
             null,
             "completed ASC, CASE WHEN event_time IS NULL THEN 1 ELSE 0 END, event_time ASC, created_at DESC"
         ).use { cursor ->
-            val idIndex = cursor.getColumnIndexOrThrow("id")
-            val titleIndex = cursor.getColumnIndexOrThrow("title")
-            val detailsIndex = cursor.getColumnIndexOrThrow("details")
-            val locationIndex = cursor.getColumnIndexOrThrow("location")
-            val eventTimeIndex = cursor.getColumnIndexOrThrow("event_time")
-            val reminderIndex = cursor.getColumnIndexOrThrow("reminder_enabled")
-            val completedIndex = cursor.getColumnIndexOrThrow("completed")
-            val imageUriIndex = cursor.getColumnIndexOrThrow("image_uri")
-            val createdAtIndex = cursor.getColumnIndexOrThrow("created_at")
-
-            while (cursor.moveToNext()) {
-                items += EventNote(
-                    id = cursor.getLong(idIndex),
-                    title = cursor.getString(titleIndex),
-                    details = cursor.getString(detailsIndex),
-                    location = cursor.getString(locationIndex),
-                    eventTime = if (cursor.isNull(eventTimeIndex)) null else cursor.getLong(eventTimeIndex),
-                    reminderEnabled = cursor.getInt(reminderIndex) == 1,
-                    completed = cursor.getInt(completedIndex) == 1,
-                    imageUri = cursor.getString(imageUriIndex).orEmpty(),
-                    createdAt = cursor.getLong(createdAtIndex)
-                )
-            }
+            while (cursor.moveToNext()) items += cursor.toEventNote()
         }
         return items
     }
@@ -109,9 +93,7 @@ class EventDatabase(context: Context) :
             null,
             "event_time ASC",
             "1"
-        ).use { cursor ->
-            if (cursor.moveToFirst()) cursor.toEventNote() else null
-        }
+        ).use { cursor -> if (cursor.moveToFirst()) cursor.toEventNote() else null }
         if (withTime != null) return withTime
 
         return readableDatabase.query(
@@ -123,9 +105,7 @@ class EventDatabase(context: Context) :
             null,
             "created_at DESC",
             "1"
-        ).use { cursor ->
-            if (cursor.moveToFirst()) cursor.toEventNote() else null
-        }
+        ).use { cursor -> if (cursor.moveToFirst()) cursor.toEventNote() else null }
     }
 
     fun insert(note: EventNote): Long =
@@ -155,29 +135,21 @@ class EventDatabase(context: Context) :
             null,
             "day_of_week ASC, start_minute ASC"
         ).use { cursor ->
-            val idIndex = cursor.getColumnIndexOrThrow("id")
-            val nameIndex = cursor.getColumnIndexOrThrow("name")
-            val teacherIndex = cursor.getColumnIndexOrThrow("teacher")
-            val locationIndex = cursor.getColumnIndexOrThrow("location")
-            val dayIndex = cursor.getColumnIndexOrThrow("day_of_week")
-            val startIndex = cursor.getColumnIndexOrThrow("start_minute")
-            val endIndex = cursor.getColumnIndexOrThrow("end_minute")
-            val noteIndex = cursor.getColumnIndexOrThrow("note")
-            while (cursor.moveToNext()) {
-                items += Course(
-                    id = cursor.getLong(idIndex),
-                    name = cursor.getString(nameIndex),
-                    teacher = cursor.getString(teacherIndex),
-                    location = cursor.getString(locationIndex),
-                    dayOfWeek = cursor.getInt(dayIndex),
-                    startMinute = cursor.getInt(startIndex),
-                    endMinute = cursor.getInt(endIndex),
-                    note = cursor.getString(noteIndex)
-                )
-            }
+            while (cursor.moveToNext()) items += cursor.toCourse()
         }
         return items
     }
+
+    fun getCourse(id: Long): Course? = readableDatabase.query(
+        "courses",
+        null,
+        "id = ?",
+        arrayOf(id.toString()),
+        null,
+        null,
+        null,
+        "1"
+    ).use { cursor -> if (cursor.moveToFirst()) cursor.toCourse() else null }
 
     fun getNextCourseToday(): Course? {
         val calendar = Calendar.getInstance()
@@ -200,19 +172,7 @@ class EventDatabase(context: Context) :
             null,
             "start_minute ASC",
             "1"
-        ).use { cursor ->
-            if (!cursor.moveToFirst()) return@use null
-            Course(
-                id = cursor.getLong(cursor.getColumnIndexOrThrow("id")),
-                name = cursor.getString(cursor.getColumnIndexOrThrow("name")),
-                teacher = cursor.getString(cursor.getColumnIndexOrThrow("teacher")),
-                location = cursor.getString(cursor.getColumnIndexOrThrow("location")),
-                dayOfWeek = cursor.getInt(cursor.getColumnIndexOrThrow("day_of_week")),
-                startMinute = cursor.getInt(cursor.getColumnIndexOrThrow("start_minute")),
-                endMinute = cursor.getInt(cursor.getColumnIndexOrThrow("end_minute")),
-                note = cursor.getString(cursor.getColumnIndexOrThrow("note"))
-            )
-        }
+        ).use { cursor -> if (cursor.moveToFirst()) cursor.toCourse() else null }
     }
 
     fun insertCourse(course: Course): Long =
@@ -231,6 +191,24 @@ class EventDatabase(context: Context) :
         writableDatabase.delete("courses", "id = ?", arrayOf(id.toString()))
     }
 
+    fun replaceAll(events: List<EventNote>, courses: List<Course>) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("events", null, null)
+            db.delete("courses", null, null)
+            events.forEach { event ->
+                db.insertOrThrow("events", null, event.copy(id = 0).toContentValues(includeCreatedAt = true))
+            }
+            courses.forEach { course ->
+                db.insertOrThrow("courses", null, course.copy(id = 0).toContentValues())
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     private fun android.database.Cursor.toEventNote() = EventNote(
         id = getLong(getColumnIndexOrThrow("id")),
         title = getString(getColumnIndexOrThrow("title")),
@@ -241,6 +219,19 @@ class EventDatabase(context: Context) :
         completed = getInt(getColumnIndexOrThrow("completed")) == 1,
         imageUri = getString(getColumnIndexOrThrow("image_uri")).orEmpty(),
         createdAt = getLong(getColumnIndexOrThrow("created_at"))
+    )
+
+    private fun android.database.Cursor.toCourse() = Course(
+        id = getLong(getColumnIndexOrThrow("id")),
+        name = getString(getColumnIndexOrThrow("name")),
+        teacher = getString(getColumnIndexOrThrow("teacher")),
+        location = getString(getColumnIndexOrThrow("location")),
+        dayOfWeek = getInt(getColumnIndexOrThrow("day_of_week")),
+        startMinute = getInt(getColumnIndexOrThrow("start_minute")),
+        endMinute = getInt(getColumnIndexOrThrow("end_minute")),
+        note = getString(getColumnIndexOrThrow("note")),
+        reminderEnabled = getInt(getColumnIndexOrThrow("reminder_enabled")) == 1,
+        reminderMinutesBefore = getInt(getColumnIndexOrThrow("reminder_minutes_before"))
     )
 
     private fun EventNote.toContentValues(includeCreatedAt: Boolean) = ContentValues().apply {
@@ -262,10 +253,12 @@ class EventDatabase(context: Context) :
         put("start_minute", startMinute.coerceIn(0, 1439))
         put("end_minute", endMinute.coerceIn(0, 1439))
         put("note", note.trim())
+        put("reminder_enabled", if (reminderEnabled) 1 else 0)
+        put("reminder_minutes_before", reminderMinutesBefore.coerceIn(0, 180))
     }
 
     companion object {
         private const val DATABASE_NAME = "suixinji.db"
-        private const val DATABASE_VERSION = 2
+        private const val DATABASE_VERSION = 3
     }
 }
