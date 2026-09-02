@@ -14,8 +14,8 @@ android {
         applicationId = "com.xiaoiubao.suixinji"
         minSdk = 26
         targetSdk = 36
-        versionCode = 4
-        versionName = "1.3.0"
+        versionCode = 5
+        versionName = "1.3.1"
     }
 
     val releaseStorePath = System.getenv("ANDROID_KEYSTORE_PATH")
