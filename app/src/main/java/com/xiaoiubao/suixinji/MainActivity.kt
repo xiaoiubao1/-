@@ -1,8 +1,12 @@
 package com.xiaoiubao.suixinji
 
+import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import com.xiaoiubao.suixinji.settings.AppSettings
 
@@ -11,10 +15,19 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        viewModel.refresh()
 
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT)
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+            window.isStatusBarContrastEnforced = false
+        }
+
+        viewModel.refresh()
         setContent {
-            SuixinjiRootV13(
+            SuixinjiRootV131(
                 viewModel = viewModel,
                 targetEventId = intent.getLongExtra(EXTRA_EVENT_ID, 0L),
                 targetCourseId = intent.getLongExtra(EXTRA_COURSE_ID, 0L),
