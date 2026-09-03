@@ -336,7 +336,7 @@ private fun V131BottomBar(selected: V131Section, onSelect: (V131Section) -> Unit
         Modifier
   .fillMaxWidth()
   .navigationBarsPadding()
-  .padding(horizontal = 18.dp, top = 4.dp, bottom = 8.dp),
+  .padding(start = 18.dp, end = 18.dp, top = 4.dp, bottom = 8.dp),
         contentAlignment = Alignment.Center
     ) {
         Surface(
