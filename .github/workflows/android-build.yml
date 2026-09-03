@@ -132,12 +132,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="v1.3.1-build-${GITHUB_RUN_NUMBER}"
+          TAG="v1.3.2-build-${GITHUB_RUN_NUMBER}"
           gh release create "$TAG" \
             suixinji.apk \
             suixinji.apk.sha256 \
             suixinji.apk.cert.txt \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "随心记 v1.3.1 · 交互与玻璃效果优化 #${GITHUB_RUN_NUMBER}" \
-            --notes "v1.3.1：时间选择改为 Compose 快捷面板，应用采用更高透明度玻璃层和 edge-to-edge 透明系统栏。\n\n固定下载地址：\nhttps://github.com/${GITHUB_REPOSITORY}/releases/latest/download/suixinji.apk"
+            --title "随心记 v1.3.2 · 悬浮圆角胶囊底栏 #${GITHUB_RUN_NUMBER}" \
+            --notes "v1.3.2：底部导航改为左右留白的悬浮圆角胶囊，继续保持高透明玻璃效果，并优化选中项的圆润高亮。\n\n固定下载地址：\nhttps://github.com/${GITHUB_REPOSITORY}/releases/latest/download/suixinji.apk"
