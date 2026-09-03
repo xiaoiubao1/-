@@ -112,7 +112,6 @@ jobs:
               }
           }
           '''
-          # Remove indentation that exists only to keep this workflow YAML readable.
           replacement = '\n'.join(line[10:] if line.startswith('          ') else line for line in replacement.splitlines())
           app.write_text(text[:start] + replacement + text[end:], encoding='utf-8')
 
@@ -121,11 +120,6 @@ jobs:
           g = g.replace('versionCode = 5', 'versionCode = 6')
           g = g.replace('versionName = "1.3.1"', 'versionName = "1.3.2"')
           gradle.write_text(g, encoding='utf-8')
-
-          release = Path('.github/workflows/android-build.yml')
-          r = release.read_text(encoding='utf-8').replace('v1.3.1', 'v1.3.2')
-          r = r.replace('交互与玻璃效果优化', '悬浮圆角胶囊底栏')
-          release.write_text(r, encoding='utf-8')
 
           readme = Path('README.md')
           rd = readme.read_text(encoding='utf-8')
@@ -138,14 +132,12 @@ jobs:
               else:
                   rd = rd.replace('\n## ', section + '\n## ', 1)
           readme.write_text(rd, encoding='utf-8')
-
-          Path('.github/workflows/v132-nav-patch.yml').unlink()
           PY
 
       - name: Commit patched source
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
+          git add app/src/main/java/com/xiaoiubao/suixinji/V131App.kt app/build.gradle.kts README.md
           git commit -m "随心记 v1.3.2：悬浮圆角胶囊底栏"
           git push origin HEAD:agent/v1-3-2-floating-pill-nav
