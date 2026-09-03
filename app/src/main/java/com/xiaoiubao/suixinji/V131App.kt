@@ -331,16 +331,49 @@ private fun V131Background(style: BackgroundStyle, hasWallpaper: Boolean, uri: S
 
 @Composable
 private fun V131BottomBar(selected: V131Section, onSelect: (V131Section) -> Unit) {
+    val wallpaper = LocalV131HasWallpaper.current
     Box(
         Modifier
-            .fillMaxWidth()
-            .background(Color.White.copy(alpha = if (LocalV131HasWallpaper.current) 0.10f else 0.30f))
-            .navigationBarsPadding()
+  .fillMaxWidth()
+  .navigationBarsPadding()
+  .padding(start = 18.dp, end = 18.dp, top = 4.dp, bottom = 8.dp),
+        contentAlignment = Alignment.Center
     ) {
-        Row(Modifier.fillMaxWidth().height(62.dp), verticalAlignment = Alignment.CenterVertically) {
-            V131NavItem(Modifier.weight(1f), selected == V131Section.TIMETABLE, Icons.Default.CalendarMonth, "课表") { onSelect(V131Section.TIMETABLE) }
-            V131NavItem(Modifier.weight(1f), selected == V131Section.NOTES, Icons.Default.NoteAlt, "随心记") { onSelect(V131Section.NOTES) }
-            V131NavItem(Modifier.weight(1f), selected == V131Section.SETTINGS, Icons.Default.Person, "我的") { onSelect(V131Section.SETTINGS) }
+        Surface(
+  modifier = Modifier.fillMaxWidth().height(66.dp),
+  shape = RoundedCornerShape(33.dp),
+  color = Color.White.copy(alpha = if (wallpaper) 0.10f else 0.34f),
+  border = BorderStroke(
+      1.dp,
+      Color.White.copy(alpha = if (wallpaper) 0.28f else 0.60f)
+  ),
+  shadowElevation = if (wallpaper) 0.dp else 2.dp,
+  tonalElevation = 0.dp
+        ) {
+  Row(
+      Modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 5.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(4.dp)
+  ) {
+      V131NavItem(
+          Modifier.weight(1f),
+          selected == V131Section.TIMETABLE,
+          Icons.Default.CalendarMonth,
+          "课表"
+      ) { onSelect(V131Section.TIMETABLE) }
+      V131NavItem(
+          Modifier.weight(1f),
+          selected == V131Section.NOTES,
+          Icons.Default.NoteAlt,
+          "随心记"
+      ) { onSelect(V131Section.NOTES) }
+      V131NavItem(
+          Modifier.weight(1f),
+          selected == V131Section.SETTINGS,
+          Icons.Default.Person,
+          "我的"
+      ) { onSelect(V131Section.SETTINGS) }
+  }
         }
     }
 }
@@ -353,22 +386,34 @@ private fun V131NavItem(
     label: String,
     onClick: () -> Unit
 ) {
-    val color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f)
+    val wallpaper = LocalV131HasWallpaper.current
+    val color = if (selected) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f)
+    }
+    val selectedBackground = MaterialTheme.colorScheme.primary.copy(
+        alpha = if (wallpaper) 0.18f else 0.13f
+    )
     Column(
-        modifier.clickable(onClick = onClick).fillMaxHeight(),
+        modifier = modifier
+  .fillMaxHeight()
+  .clip(RoundedCornerShape(26.dp))
+  .background(if (selected) selectedBackground else Color.Transparent)
+  .clickable(onClick = onClick),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Box(
-            Modifier
-                .clip(RoundedCornerShape(18.dp))
-                .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
-                .padding(horizontal = 16.dp, vertical = 4.dp)
-        ) { Icon(icon, null, tint = color, modifier = Modifier.size(22.dp)) }
-        Text(label, fontSize = 11.sp, color = color, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+        Icon(icon, null, tint = color, modifier = Modifier.size(21.dp))
+        Spacer(Modifier.height(2.dp))
+        Text(
+  label,
+  fontSize = 10.5.sp,
+  color = color,
+  fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+        )
     }
 }
-
 @Composable
 private fun V131UriImage(uri: String, modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Crop) {
     val context = LocalContext.current
