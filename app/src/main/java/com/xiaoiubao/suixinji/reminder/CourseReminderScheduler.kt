@@ -1,13 +1,9 @@
 package com.xiaoiubao.suixinji.reminder
 
 import android.content.Context
-import androidx.work.Data
-import androidx.work.ExistingWorkPolicy
-import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.xiaoiubao.suixinji.data.Course
 import java.util.Calendar
-import java.util.concurrent.TimeUnit
 
 object CourseReminderScheduler {
     private fun workName(id: Long) = "course-reminder-$id"
@@ -15,35 +11,19 @@ object CourseReminderScheduler {
     fun schedule(context: Context, course: Course) {
         cancel(context, course.id)
         if (!course.reminderEnabled || course.id <= 0L) return
-
-        val triggerAt = nextTriggerMillis(course)
-        val delay = (triggerAt - System.currentTimeMillis()).coerceAtLeast(1_000L)
-        val data = Data.Builder()
-            .putLong(CourseReminderWorker.KEY_COURSE_ID, course.id)
-            .putString(CourseReminderWorker.KEY_NAME, course.name)
-            .putString(CourseReminderWorker.KEY_LOCATION, course.location)
-            .putInt(CourseReminderWorker.KEY_START_MINUTE, course.startMinute)
-            .putInt(CourseReminderWorker.KEY_MINUTES_BEFORE, course.reminderMinutesBefore)
-            .build()
-
-        val request = OneTimeWorkRequestBuilder<CourseReminderWorker>()
-            .setInitialDelay(delay, TimeUnit.MILLISECONDS)
-            .setInputData(data)
-            .addTag(workName(course.id))
-            .build()
-
-        WorkManager.getInstance(context).enqueueUniqueWork(
-            workName(course.id),
-            ExistingWorkPolicy.REPLACE,
-            request
-        )
+        ReminderAlarms.schedule(context, "course", course.id, nextTriggerMillis(course), revision(course))
     }
 
     fun cancel(context: Context, id: Long) {
-        if (id > 0L) WorkManager.getInstance(context).cancelUniqueWork(workName(id))
+        if (id <= 0) return
+        ReminderAlarms.cancel(context, "course", id)
+        WorkManager.getInstance(context).cancelUniqueWork(workName(id))
     }
 
-    private fun nextTriggerMillis(course: Course, nowMillis: Long = System.currentTimeMillis()): Long {
+    internal fun revision(course: Course): String =
+        "${course.dayOfWeek}:${course.startMinute}:${course.endMinute}:${course.reminderMinutesBefore}"
+
+    internal fun nextTriggerMillis(course: Course, nowMillis: Long = System.currentTimeMillis()): Long {
         val now = Calendar.getInstance().apply { timeInMillis = nowMillis }
         val target = Calendar.getInstance().apply {
             timeInMillis = nowMillis

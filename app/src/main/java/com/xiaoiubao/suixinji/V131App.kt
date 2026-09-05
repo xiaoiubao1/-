@@ -2,7 +2,16 @@ package com.xiaoiubao.suixinji
 
 import android.Manifest
 import android.content.Context
-import android.graphics.BitmapFactory
+import android.graphics.Bitmap
+import android.content.Intent
+import android.provider.Settings
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import com.xiaoiubao.suixinji.reminder.ReminderAlarms
 import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -80,10 +89,9 @@ fun SuixinjiRootV131(
     val events by viewModel.events.collectAsState()
     val courses by viewModel.courses.collectAsState()
     val operationMessage by viewModel.importMessage.collectAsState()
+    val busy by viewModel.busy.collectAsState()
 
-    var section by remember { mutableStateOf(V131Section.TIMETABLE) }
-    var editingEvent by remember { mutableStateOf<EventNote?>(null) }
-    var editingCourse by remember { mutableStateOf<Course?>(null) }
+    var section by rememberSaveable { mutableStateOf(V131Section.TIMETABLE) }
 
     var theme by remember { mutableStateOf(settings.theme) }
     var backgroundStyle by remember { mutableStateOf(settings.backgroundStyle) }
@@ -100,8 +108,8 @@ fun SuixinjiRootV131(
 
     var pendingNotificationTest by remember { mutableStateOf(false) }
     var pendingRestoreUri by remember { mutableStateOf<Uri?>(null) }
-    var handledEventTarget by remember(targetEventId) { mutableStateOf(false) }
-    var handledCourseTarget by remember(targetCourseId) { mutableStateOf(false) }
+    var handledEventTarget by rememberSaveable(targetEventId) { mutableStateOf(false) }
+    var handledCourseTarget by rememberSaveable(targetCourseId) { mutableStateOf(false) }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -144,7 +152,7 @@ fun SuixinjiRootV131(
         if (!handledEventTarget && targetEventId > 0 && events.isNotEmpty()) {
             events.firstOrNull { it.id == targetEventId }?.let {
                 section = V131Section.NOTES
-                editingEvent = it
+                viewModel.editingEvent = it
                 handledEventTarget = true
             }
         }
@@ -153,7 +161,7 @@ fun SuixinjiRootV131(
         if (!handledCourseTarget && targetCourseId > 0 && courses.isNotEmpty()) {
             courses.firstOrNull { it.id == targetCourseId }?.let {
                 section = V131Section.TIMETABLE
-                editingCourse = it
+                viewModel.editingCourse = it
                 handledCourseTarget = true
             }
         }
@@ -195,14 +203,14 @@ fun SuixinjiRootV131(
                         V131Section.TIMETABLE -> V131Timetable(
                             modifier = Modifier.padding(padding),
                             courses = courses,
-                            onEdit = { editingCourse = it },
-                            onAdd = { editingCourse = it }
+                            onEdit = { viewModel.editingCourse = it },
+                            onAdd = { viewModel.editingCourse = it }
                         )
                         V131Section.NOTES -> V131Notes(
                             modifier = Modifier.padding(padding),
                             events = events,
-                            onEdit = { editingEvent = it },
-                            onAdd = { editingEvent = EventNote() },
+                            onEdit = { viewModel.editingEvent = it },
+                            onAdd = { viewModel.editingEvent = EventNote() },
                             onToggle = viewModel::toggleCompleted,
                             onDelete = viewModel::delete
                         )
@@ -273,22 +281,21 @@ fun SuixinjiRootV131(
         }
     }
 
-    editingEvent?.let { note ->
-        V131EventEditor(note, onDismiss = { editingEvent = null }) { updated ->
+    viewModel.editingEvent?.let { note ->
+        V131EventEditor(note, onDismiss = { viewModel.editingEvent = null }, onChange = { viewModel.editingEvent = it }) { updated ->
             v131RequestNotifyPermission(context, updated.reminderEnabled, notificationPermissionLauncher)
             viewModel.save(updated)
-            editingEvent = null
         }
     }
-    editingCourse?.let { course ->
+    viewModel.editingCourse?.let { course ->
         V131CourseEditor(
             course = course,
-            onDismiss = { editingCourse = null },
-            onDelete = { viewModel.deleteCourse(course); editingCourse = null }
+            onDismiss = { viewModel.editingCourse = null },
+            onDelete = { viewModel.deleteCourse(course) },
+            onChange = { viewModel.editingCourse = it }
         ) { updated ->
             v131RequestNotifyPermission(context, updated.reminderEnabled, notificationPermissionLauncher)
             viewModel.saveCourse(updated)
-            editingCourse = null
         }
     }
     pendingRestoreUri?.let { uri ->
@@ -299,6 +306,12 @@ fun SuixinjiRootV131(
             dismissButton = { TextButton(onClick = { pendingRestoreUri = null }) { Text("取消") } },
             confirmButton = { Button(onClick = { pendingRestoreUri = null; viewModel.restoreBackup(uri) }) { Text("覆盖并恢复") } }
         )
+    }
+    if (busy) {
+        AlertDialog(onDismissRequest = {}, title = { Text("正在处理") },
+            text = { Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(24.dp)); Spacer(Modifier.width(12.dp)); Text("请稍候…")
+            } }, confirmButton = {})
     }
     operationMessage?.let { message ->
         AlertDialog(
@@ -417,12 +430,10 @@ private fun V131NavItem(
 @Composable
 private fun V131UriImage(uri: String, modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Crop) {
     val context = LocalContext.current
-    val bitmap = remember(uri) {
-        runCatching {
-            context.contentResolver.openInputStream(Uri.parse(uri))?.use { BitmapFactory.decodeStream(it)?.asImageBitmap() }
-        }.getOrNull()
+    val bitmap by produceState<Bitmap?>(initialValue = null, uri) {
+        value = withContext(Dispatchers.IO) { ImageLoader.load(context.applicationContext, uri) }
     }
-    bitmap?.let { Image(it, null, modifier, contentScale = contentScale) }
+    bitmap?.let { Image(it.asImageBitmap(), null, modifier, contentScale = contentScale) }
 }
 
 @Composable
@@ -449,10 +460,11 @@ private fun V131Timetable(
     onEdit: (Course) -> Unit,
     onAdd: (Course) -> Unit
 ) {
+    var choices by remember { mutableStateOf<List<Course>>(emptyList()) }
     val currentDay = v131CurrentWeekday()
-    val dates = remember { v131CurrentWeekDates() }
-    val now = remember { Calendar.getInstance() }
-    val dateText = remember { SimpleDateFormat("yyyy/M/d", Locale.getDefault()).format(Date()) }
+    val dates = v131CurrentWeekDates()
+    val now = Calendar.getInstance()
+    val dateText = SimpleDateFormat("yyyy/M/d", Locale.getDefault()).format(Date())
 
     Column(modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 7.dp, vertical = 5.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -500,14 +512,19 @@ private fun V131Timetable(
                                 Text(v131Minute(period.start), fontSize = 6.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             (1..7).forEach { day ->
-                                val matches = courses.filter { it.dayOfWeek == day && v131NearestPeriod(it.startMinute) == index }
+                                val matches = courses.filter { item ->
+                                    item.dayOfWeek == day && (if (v131Periods.any { item.startMinute < it.end && item.endMinute > it.start })
+                                        item.startMinute < period.end && item.endMinute > period.start
+                                    else v131NearestPeriod(item.startMinute) == index)
+                                }
                                 val course = matches.firstOrNull()
                                 Box(
                                     Modifier.weight(1f).fillMaxHeight().padding(0.7.dp)
                                         .clip(RoundedCornerShape(6.dp))
                                         .background(if (day == currentDay) MaterialTheme.colorScheme.primary.copy(alpha = 0.025f) else Color.Transparent)
                                         .clickable {
-                                            if (course != null) onEdit(course)
+                                            if (matches.size > 1) choices = matches
+                                            else if (course != null) onEdit(course)
                                             else onAdd(Course(dayOfWeek = day, startMinute = period.start, endMinute = period.end))
                                         },
                                     contentAlignment = Alignment.Center
@@ -523,7 +540,7 @@ private fun V131Timetable(
                                                 verticalArrangement = Arrangement.Center,
                                                 horizontalAlignment = Alignment.CenterHorizontally
                                             ) {
-                                                Text(course.name, fontSize = 7.5.sp, lineHeight = 8.5.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                                Text(if (matches.size > 1) "${course.name} +${matches.size - 1}" else course.name, fontSize = 7.5.sp, lineHeight = 8.5.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                                 if (course.location.isNotBlank() && rowHeight >= 43.dp) {
                                                     Text(course.location, fontSize = 6.sp, lineHeight = 6.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                                 }
@@ -538,6 +555,17 @@ private fun V131Timetable(
             }
         }
     }
+    if (choices.isNotEmpty()) {
+        AlertDialog(onDismissRequest = { choices = emptyList() }, title = { Text("选择课程") },
+            text = { Column(Modifier.verticalScroll(rememberScrollState())) {
+                choices.forEach { item ->
+                    TextButton(onClick = { choices = emptyList(); onEdit(item) }) {
+                        Text("${v131Minute(item.startMinute)}–${v131Minute(item.endMinute)} ${item.name}")
+                    }
+                }
+            } }, confirmButton = { TextButton(onClick = { choices = emptyList() }) { Text("关闭") } })
+    }
+
 }
 
 @Composable
@@ -709,6 +737,7 @@ private fun V131Settings(
         item {
             V131GlassCard {
                 V131SettingTitle(Icons.Default.NotificationsActive, "通知与数据", "测试提醒、导入导出与完整备份")
+                ReminderPermissionStatus()
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     FilledTonalButton(onClick = onNotificationTest) { Text("测试通知") }
                     OutlinedButton(onClick = onImport) { Text("导入") }
@@ -742,18 +771,17 @@ private fun V131ColorDot(color: Int, selected: Boolean, onClick: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun V131EventEditor(note: EventNote, onDismiss: () -> Unit, onSave: (EventNote) -> Unit) {
+private fun V131EventEditor(note: EventNote, onDismiss: () -> Unit, onChange: (EventNote) -> Unit, onSave: (EventNote) -> Unit) {
     val context = LocalContext.current
-    var title by remember(note.id) { mutableStateOf(note.title) }
-    var details by remember(note.id) { mutableStateOf(note.details) }
-    var location by remember(note.id) { mutableStateOf(note.location) }
-    var eventTime by remember(note.id) { mutableStateOf(note.eventTime) }
-    var reminder by remember(note.id) { mutableStateOf(note.reminderEnabled) }
-    var imageUri by remember(note.id) { mutableStateOf(note.imageUri) }
-    var showDateTime by remember { mutableStateOf(false) }
-
+    val title = note.title
+    val details = note.details
+    val location = note.location
+    val eventTime = note.eventTime
+    val reminder = note.reminderEnabled
+    val imageUri = note.imageUri
+    var showDateTime by rememberSaveable { mutableStateOf(false) }
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let { v131PersistUriPermission(context, it); imageUri = it.toString() }
+        uri?.let { v131PersistUriPermission(context, it); onChange(note.copy(imageUri = it.toString())) }
     }
 
     AlertDialog(
@@ -761,14 +789,14 @@ private fun V131EventEditor(note: EventNote, onDismiss: () -> Unit, onSave: (Eve
         title = { Text(if (note.id == 0L) "新建随心记" else "编辑随心记") },
         text = {
             Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                OutlinedTextField(title, { title = it }, Modifier.fillMaxWidth(), label = { Text("标题") })
-                OutlinedTextField(details, { details = it }, Modifier.fillMaxWidth(), label = { Text("内容") }, minLines = 3)
-                OutlinedTextField(location, { location = it }, Modifier.fillMaxWidth(), label = { Text("地点") })
+                OutlinedTextField(title, { onChange(note.copy(title = it)) }, Modifier.fillMaxWidth(), label = { Text("标题") })
+                OutlinedTextField(details, { onChange(note.copy(details = it)) }, Modifier.fillMaxWidth(), label = { Text("内容") }, minLines = 3)
+                OutlinedTextField(location, { onChange(note.copy(location = it)) }, Modifier.fillMaxWidth(), label = { Text("地点") })
                 FilledTonalButton(onClick = { showDateTime = true }, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Default.Schedule, null); Spacer(Modifier.width(6.dp)); Text(eventTime?.let(::v131FormatTime) ?: "选择日期和时间")
                 }
-                if (eventTime != null) TextButton(onClick = { eventTime = null }) { Text("清除时间") }
-                Row(verticalAlignment = Alignment.CenterVertically) { Text("到点提醒", Modifier.weight(1f)); Switch(reminder, { reminder = it }) }
+                if (eventTime != null) TextButton(onClick = { onChange(note.copy(eventTime = null)) }) { Text("清除时间") }
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("到点提醒", Modifier.weight(1f)); Switch(reminder, { onChange(note.copy(reminderEnabled = it)) }) }
                 OutlinedButton(onClick = { imagePicker.launch(arrayOf("image/*")) }, modifier = Modifier.fillMaxWidth()) { Text(if (imageUri.isBlank()) "添加图片" else "更换图片") }
                 if (imageUri.isNotBlank()) V131UriImage(imageUri, Modifier.fillMaxWidth().height(115.dp).clip(RoundedCornerShape(12.dp)))
             }
@@ -786,51 +814,51 @@ private fun V131EventEditor(note: EventNote, onDismiss: () -> Unit, onSave: (Eve
         V131DateTimeSheet(
             initial = eventTime,
             onDismiss = { showDateTime = false },
-            onConfirm = { eventTime = it; showDateTime = false }
+            onConfirm = { onChange(note.copy(eventTime = it)); showDateTime = false }
         )
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun V131CourseEditor(course: Course, onDismiss: () -> Unit, onDelete: () -> Unit, onSave: (Course) -> Unit) {
-    var name by remember(course.id) { mutableStateOf(course.name) }
-    var teacher by remember(course.id) { mutableStateOf(course.teacher) }
-    var location by remember(course.id) { mutableStateOf(course.location) }
-    var day by remember(course.id) { mutableIntStateOf(course.dayOfWeek.coerceIn(1, 7)) }
-    var start by remember(course.id) { mutableIntStateOf(course.startMinute) }
-    var end by remember(course.id) { mutableIntStateOf(course.endMinute) }
-    var note by remember(course.id) { mutableStateOf(course.note) }
-    var reminder by remember(course.id) { mutableStateOf(course.reminderEnabled) }
-    var before by remember(course.id) { mutableIntStateOf(course.reminderMinutesBefore) }
-    var editingStart by remember { mutableStateOf<Boolean?>(null) }
+private fun V131CourseEditor(course: Course, onDismiss: () -> Unit, onDelete: () -> Unit, onChange: (Course) -> Unit, onSave: (Course) -> Unit) {
+    val name = course.name
+    val teacher = course.teacher
+    val location = course.location
+    val day = course.dayOfWeek.coerceIn(1, 7)
+    val start = course.startMinute
+    val end = course.endMinute
+    val note = course.note
+    val reminder = course.reminderEnabled
+    val before = course.reminderMinutesBefore
+    var editingStart by rememberSaveable { mutableStateOf<Boolean?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (course.id == 0L) "添加课程" else "编辑课程") },
         text = {
             Column(Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                OutlinedTextField(name, { name = it }, Modifier.fillMaxWidth(), label = { Text("课程名称") })
-                OutlinedTextField(teacher, { teacher = it }, Modifier.fillMaxWidth(), label = { Text("老师") })
-                OutlinedTextField(location, { location = it }, Modifier.fillMaxWidth(), label = { Text("教室") })
+                OutlinedTextField(name, { onChange(course.copy(name = it)) }, Modifier.fillMaxWidth(), label = { Text("课程名称") })
+                OutlinedTextField(teacher, { onChange(course.copy(teacher = it)) }, Modifier.fillMaxWidth(), label = { Text("老师") })
+                OutlinedTextField(location, { onChange(course.copy(location = it)) }, Modifier.fillMaxWidth(), label = { Text("教室") })
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    (1..7).forEach { d -> FilterChip(d == day, { day = d }, { Text(v131Weekday(d)) }) }
+                    (1..7).forEach { d -> FilterChip(d == day, { onChange(course.copy(dayOfWeek = d)) }, { Text(v131Weekday(d)) }) }
                 }
                 Text("快捷课节", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     v131Periods.forEach { p ->
-                        AssistChip(onClick = { start = p.start; end = p.end }, label = { Text("${p.number}节 ${v131Minute(p.start)}") })
+                        AssistChip(onClick = { onChange(course.copy(startMinute = p.start, endMinute = p.end)) }, label = { Text("${p.number}节 ${v131Minute(p.start)}") })
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     FilledTonalButton(onClick = { editingStart = true }, Modifier.weight(1f)) { Text("开始 ${v131Minute(start)}") }
                     FilledTonalButton(onClick = { editingStart = false }, Modifier.weight(1f)) { Text("结束 ${v131Minute(end)}") }
                 }
-                OutlinedTextField(note, { note = it }, Modifier.fillMaxWidth(), label = { Text("备注") })
-                Row(verticalAlignment = Alignment.CenterVertically) { Text("课程开始提醒", Modifier.weight(1f)); Switch(reminder, { reminder = it }) }
+                OutlinedTextField(note, { onChange(course.copy(note = it)) }, Modifier.fillMaxWidth(), label = { Text("备注") })
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("课程开始提醒", Modifier.weight(1f)); Switch(reminder, { onChange(course.copy(reminderEnabled = it)) }) }
                 if (reminder) {
                     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        listOf(0, 5, 10, 15, 30, 60).forEach { m -> FilterChip(m == before, { before = m }, { Text(if (m == 0) "上课时" else "$m 分") }) }
+                        listOf(0, 5, 10, 15, 30, 60).forEach { m -> FilterChip(m == before, { onChange(course.copy(reminderMinutesBefore = m)) }, { Text(if (m == 0) "上课时" else "$m 分") }) }
                     }
                 }
                 if (course.id != 0L) OutlinedButton(onClick = onDelete, modifier = Modifier.fillMaxWidth()) { Text("删除课程") }
@@ -851,7 +879,7 @@ private fun V131CourseEditor(course: Course, onDismiss: () -> Unit, onDelete: ()
             initial = if (isStart) start else end,
             onDismiss = { editingStart = null },
             onConfirm = {
-                if (isStart) start = it else end = it
+                onChange(if (isStart) course.copy(startMinute = it) else course.copy(endMinute = it))
                 editingStart = null
             }
         )
@@ -862,13 +890,13 @@ private fun V131CourseEditor(course: Course, onDismiss: () -> Unit, onDelete: ()
 @Composable
 private fun V131DateTimeSheet(initial: Long?, onDismiss: () -> Unit, onConfirm: (Long) -> Unit) {
     val initialCalendar = remember(initial) { Calendar.getInstance().apply { timeInMillis = initial ?: System.currentTimeMillis() } }
-    var selectedDay by remember(initial) { mutableLongStateOf(v131StartOfDay(initialCalendar.timeInMillis)) }
-    var hour by remember(initial) { mutableIntStateOf(initialCalendar.get(Calendar.HOUR_OF_DAY)) }
-    var minute by remember(initial) { mutableIntStateOf((initialCalendar.get(Calendar.MINUTE) / 5) * 5) }
-    var showCalendar by remember { mutableStateOf(false) }
+    var selectedDay by rememberSaveable(initial) { mutableLongStateOf(v131StartOfDay(initialCalendar.timeInMillis)) }
+    var hour by rememberSaveable(initial) { mutableIntStateOf(initialCalendar.get(Calendar.HOUR_OF_DAY)) }
+    var minute by rememberSaveable(initial) { mutableIntStateOf((initialCalendar.get(Calendar.MINUTE) / 5) * 5) }
+    var showCalendar by rememberSaveable { mutableStateOf(false) }
 
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 18.dp)) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 18.dp)) {
             Text("选择日期和时间", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Text("常用日期和时间直接点，远期日期再展开日历。", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(10.dp))
@@ -892,10 +920,10 @@ private fun V131DateTimeSheet(initial: Long?, onDismiss: () -> Unit, onConfirm: 
             }
 
             if (showCalendar) {
-                val datePickerState = rememberDatePickerState(initialSelectedDateMillis = selectedDay)
+                val datePickerState = rememberDatePickerState(initialSelectedDateMillis = DateTimes.pickerDate(selectedDay))
                 DatePicker(state = datePickerState, showModeToggle = false)
                 LaunchedEffect(datePickerState.selectedDateMillis) {
-                    datePickerState.selectedDateMillis?.let { selectedDay = v131StartOfDay(it) }
+                    datePickerState.selectedDateMillis?.let { selectedDay = DateTimes.localDate(it) }
                 }
             }
 
@@ -928,10 +956,10 @@ private fun V131DateTimeSheet(initial: Long?, onDismiss: () -> Unit, onConfirm: 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun V131MinuteSheet(title: String, initial: Int, onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
-    var hour by remember(initial) { mutableIntStateOf((initial / 60).coerceIn(0, 23)) }
-    var minute by remember(initial) { mutableIntStateOf((initial % 60 / 5) * 5) }
+    var hour by rememberSaveable(initial) { mutableIntStateOf((initial / 60).coerceIn(0, 23)) }
+    var minute by rememberSaveable(initial) { mutableIntStateOf((initial % 60 / 5) * 5) }
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 18.dp)) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 18.dp)) {
             Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Text("直接点小时和分钟，比系统时钟盘更快。", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(10.dp))
@@ -974,7 +1002,7 @@ private fun v131ColorScheme(theme: ThemePreset, backgroundStyle: BackgroundStyle
 
 private fun v131CourseColor(seed: String): Color {
     val colors = listOf(Color(0xFFF7B6C8), Color(0xFFB8D8F7), Color(0xFFC5E6C8), Color(0xFFE1C8F2), Color(0xFFF5D5A8), Color(0xFFBDE3E5))
-    return colors[abs(seed.hashCode()) % colors.size]
+    return colors[DateTimes.colorIndex(seed, colors.size)]
 }
 
 private fun v131Luminance(color: Int): Double {
@@ -1030,5 +1058,31 @@ private fun v131PersistUriPermission(context: Context, uri: Uri) {
 private fun v131RequestNotifyPermission(context: Context, enabled: Boolean, launcher: androidx.activity.result.ActivityResultLauncher<String>) {
     if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && androidx.core.content.ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
         launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+}
+
+@Composable
+private fun ReminderPermissionStatus() {
+    val context = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    var revision by remember { mutableIntStateOf(0) }
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) revision++ }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
+    val exact = remember(revision) { ReminderAlarms.canScheduleExact(context) }
+    val notify = remember(revision) { NotificationTester.canNotify(context) }
+    Text(if (exact) "准时提醒权限已开启" else "未开启准时提醒权限，提醒可能延迟", fontSize = 11.sp)
+    if (!exact && Build.VERSION.SDK_INT >= 31) {
+        TextButton(onClick = {
+            runCatching { context.startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${context.packageName}"))) }
+        }) { Text("开启准时提醒") }
+    }
+    if (!notify) {
+        Text("通知尚未开启", fontSize = 11.sp)
+        TextButton(onClick = {
+            context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
+        }) { Text("打开通知设置") }
     }
 }

@@ -11,9 +11,6 @@ import org.json.JSONObject
 import java.io.BufferedWriter
 import java.io.File
 import java.io.OutputStreamWriter
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
@@ -34,12 +31,12 @@ class BackupService(private val context: Context) {
                             event.title,
                             event.details,
                             event.location,
-                            event.eventTime?.let(::formatDateTime).orEmpty(),
+                            event.eventTime?.toString().orEmpty(),
                             event.reminderEnabled.toString(),
                             event.completed.toString(),
                             event.imageUri,
                             event.createdAt.toString()
-                        ).joinToString(",") { csvEscape(it) }
+                        ).joinToString(",") { CsvCodec.escape(it) }
                     )
                     writer.newLine()
                 }
@@ -53,8 +50,26 @@ class BackupService(private val context: Context) {
         val courses = db.getCourses()
         val wallpaper = settings.wallpaper
         val widgetBackground = settings.widgetBackgroundUri
-        val wallpaperEntry = if (wallpaper.isNotBlank()) "media/wallpaper.bin" else ""
-        val widgetEntry = if (widgetBackground.isNotBlank()) "media/widget-background.bin" else ""
+        val staging = File(context.cacheDir, "backup-${UUID.randomUUID()}").apply { check(mkdirs()) }
+        var missingImages = 0
+        fun stage(sourceUri: String, entry: String): String {
+            if (sourceUri.isBlank()) return ""
+            val target = safeTarget(staging, entry)
+            return try {
+                target.parentFile?.mkdirs()
+                context.contentResolver.openInputStream(Uri.parse(sourceUri))?.use { input ->
+                    target.outputStream().use { input.copyTo(it) }
+                } ?: error("图片无法读取")
+                entry
+            } catch (e: Exception) {
+                target.delete()
+                missingImages++
+                ""
+            }
+        }
+        try {
+        val wallpaperEntry = stage(wallpaper, "media/wallpaper.bin")
+        val widgetEntry = stage(widgetBackground, "media/widget-background.bin")
 
         val root = JSONObject().apply {
             put("format", "suixinji-backup")
@@ -79,7 +94,7 @@ class BackupService(private val context: Context) {
 
         val eventArray = JSONArray()
         events.forEachIndexed { index, event ->
-            val imageEntry = if (event.imageUri.isNotBlank()) "media/event_$index.bin" else ""
+            val imageEntry = stage(event.imageUri, "media/event_$index.bin")
             eventArray.put(JSONObject().apply {
                 put("title", event.title)
                 put("details", event.details)
@@ -114,28 +129,51 @@ class BackupService(private val context: Context) {
                 zip.putNextEntry(ZipEntry("backup.json"))
                 zip.write(root.toString(2).toByteArray(Charsets.UTF_8))
                 zip.closeEntry()
-                if (wallpaperEntry.isNotBlank()) copyUriToZip(wallpaper, wallpaperEntry, zip)
-                if (widgetEntry.isNotBlank()) copyUriToZip(widgetBackground, widgetEntry, zip)
-                events.forEachIndexed { index, event ->
-                    if (event.imageUri.isNotBlank()) copyUriToZip(event.imageUri, "media/event_$index.bin", zip)
+                staging.walkTopDown().filter { it.isFile }.forEach { file ->
+                    zip.putNextEntry(ZipEntry(file.relativeTo(staging).invariantSeparatorsPath))
+                    file.inputStream().use { it.copyTo(zip) }
+                    zip.closeEntry()
                 }
             }
         } ?: error("无法创建备份文件")
 
-        return "备份完成：${events.size} 条记录、${courses.size} 门课程"
+        return "备份完成：${events.size} 条记录、${courses.size} 门课程" +
+            if (missingImages > 0) "；有 $missingImages 张图片无法读取，未包含在备份中" else ""
+        } finally { staging.deleteRecursively() }
     }
 
     fun restoreBackup(db: EventDatabase, settings: AppSettings, uri: Uri): String {
-        val tempDir = File(context.cacheDir, "restore-${UUID.randomUUID()}").apply { mkdirs() }
+        val tempDir = File(context.cacheDir, "restore-${UUID.randomUUID()}").apply { check(mkdirs()) }
+        // A fresh generation keeps all live images intact until the restore has committed.
+        val mediaRoot = File(context.filesDir, "restored_media")
+        val newMedia = File(mediaRoot, "generation-${UUID.randomUUID()}")
+        var committed = false
+        var settingsTouched = false
+        val oldSettings = settings.snapshot()
+        var missingImages = 0
         try {
             context.contentResolver.openInputStream(uri)?.use { raw ->
                 ZipInputStream(raw).use { zip ->
+                    var total = 0L
+                    var count = 0
+                    val names = mutableSetOf<String>()
+                    val buffer = ByteArray(8192)
                     var entry = zip.nextEntry
                     while (entry != null) {
+                        require(++count <= 10000) { "备份文件数量过多" }
+                        val target = safeTarget(tempDir, entry.name)
+                        require(names.add(target.canonicalPath)) { "备份含有重复文件" }
                         if (!entry.isDirectory) {
-                            val target = safeTarget(tempDir, entry.name)
                             target.parentFile?.mkdirs()
-                            target.outputStream().use { zip.copyTo(it) }
+                            target.outputStream().use { output ->
+                                var n = zip.read(buffer)
+                                while (n != -1) {
+                                    total += n
+                                    require(total <= 512L * 1024 * 1024) { "备份解压后超过 512 MiB" }
+                                    output.write(buffer, 0, n)
+                                    n = zip.read(buffer)
+                                }
+                            }
                         }
                         zip.closeEntry()
                         entry = zip.nextEntry
@@ -144,101 +182,121 @@ class BackupService(private val context: Context) {
             } ?: error("无法读取备份文件")
 
             val rootFile = File(tempDir, "backup.json")
-            require(rootFile.exists()) { "不是有效的随心记备份文件" }
+            require(rootFile.isFile && rootFile.length() <= 8L * 1024 * 1024) { "备份清单不存在或过大" }
             val root = JSONObject(rootFile.readText(Charsets.UTF_8))
-            require(root.optString("format") == "suixinji-backup") { "备份格式不受支持" }
-
-            val restoredMediaDir = File(context.filesDir, "restored_media").apply {
-                deleteRecursively()
-                mkdirs()
+            require(root.text("format") == "suixinji-backup") { "备份格式不受支持" }
+            require(root.number("version", -1) in 1L..3L) { "备份版本不受支持" }
+            // Missing / mistyped arrays must not turn into an apparently successful empty restore.
+            val eventsJson = root.getJSONArray("events")
+            val coursesJson = root.getJSONArray("courses")
+            val json = if (root.has("settings")) root.getJSONObject("settings") else null
+            check(newMedia.mkdirs()) { "无法创建恢复目录" }
+            fun media(entry: String, prefix: String): String {
+                if (entry.isBlank()) return ""
+                val source = safeTarget(tempDir, entry)
+                require(entry.startsWith("media/")) { "非法的图片引用" }
+                if (!source.isFile) { missingImages++; return "" }
+                val target = File(newMedia, "$prefix-${UUID.randomUUID()}.bin")
+                source.copyTo(target)
+                return Uri.fromFile(target).toString()
             }
-
-            val eventsJson = root.optJSONArray("events") ?: JSONArray()
-            val events = buildList {
-                for (i in 0 until eventsJson.length()) {
-                    val item = eventsJson.getJSONObject(i)
-                    val image = restoreMedia(tempDir, item.optString("imageEntry"), restoredMediaDir, "event-$i")
-                    add(EventNote(
-                        title = item.optString("title"),
-                        details = item.optString("details"),
-                        location = item.optString("location"),
-                        eventTime = if (item.isNull("eventTime") || !item.has("eventTime")) null else item.optLong("eventTime"),
-                        reminderEnabled = item.optBoolean("reminderEnabled", false),
-                        completed = item.optBoolean("completed", false),
-                        imageUri = image,
-                        createdAt = item.optLong("createdAt", System.currentTimeMillis())
-                    ))
+            val events = (0 until eventsJson.length()).map { index ->
+                val item = eventsJson.getJSONObject(index)
+                val title = item.text("title")
+                require(title.isNotBlank()) { "记录标题为空" }
+                EventNote(
+                    title = title, details = item.text("details"), location = item.text("location"),
+                    eventTime = if (!item.has("eventTime") || item.isNull("eventTime")) null else item.number("eventTime", 0),
+                    reminderEnabled = item.flag("reminderEnabled", false),
+                    completed = item.flag("completed", false),
+                    imageUri = media(item.text("imageEntry"), "event-$index"),
+                    createdAt = item.number("createdAt", System.currentTimeMillis())
+                )
+            }
+            val courses = (0 until coursesJson.length()).map { index ->
+                val item = coursesJson.getJSONObject(index)
+                val day = item.integer("dayOfWeek", 1)
+                val start = item.integer("startMinute", 480)
+                val end = item.integer("endMinute", 540)
+                val before = item.integer("reminderMinutesBefore", 10)
+                val name = item.text("name")
+                require(name.isNotBlank() && day in 1..7 && start in 0..1439 && end in 1..1439 && end > start && before in 0..180) { "课程数据无效" }
+                Course(name = name, teacher = item.text("teacher"), location = item.text("location"),
+                    dayOfWeek = day, startMinute = start, endMinute = end, note = item.text("note"),
+                    reminderEnabled = item.flag("reminderEnabled", false), reminderMinutesBefore = before)
+            }
+            val nextSettings = oldSettings.toMutableMap()
+            json?.let {
+                val wallpaper = if (it.text("wallpaper") == "custom") media(it.text("wallpaperEntry"), "wallpaper") else ""
+                val widget = if (it.text("widgetBackground") == "custom") media(it.text("widgetBackgroundEntry"), "widget") else ""
+                nextSettings.putAll(mapOf(
+                    "theme" to ThemePreset.valueOf(it.text("theme", ThemePreset.CREAM.name)).name,
+                    "background_style" to BackgroundStyle.valueOf(it.text("backgroundStyle", BackgroundStyle.LIGHT.name)).name,
+                    "glass_strength" to it.fraction("glassStrength", 0.60f, 0f),
+                    "wallpaper" to wallpaper,
+                    "custom_background_enabled" to (it.flag("customBackgroundEnabled", wallpaper.isNotBlank()) && wallpaper.isNotBlank()),
+                    "widget_background_uri" to widget,
+                    "widget_background_color" to it.integer("widgetBackgroundColor", 0xFFF4F1FA.toInt()),
+                    "widget_text_mode" to WidgetTextMode.valueOf(it.text("widgetTextMode", WidgetTextMode.AUTO.name)).name,
+                    "widget_accent_color" to it.integer("widgetAccentColor", 0xFF7B61D1.toInt()),
+                    "widget_opacity" to it.fraction("widgetOpacity", 0.82f, 0.35f),
+                    "widget_frosted" to it.flag("widgetFrosted", true)
+                ))
+            }
+            db.replaceAll(events, courses) {
+                if (json != null) {
+                    settingsTouched = true
+                    settings.replace(nextSettings)
                 }
             }
-
-            val coursesJson = root.optJSONArray("courses") ?: JSONArray()
-            val courses = buildList {
-                for (i in 0 until coursesJson.length()) {
-                    val item = coursesJson.getJSONObject(i)
-                    add(Course(
-                        name = item.optString("name"),
-                        teacher = item.optString("teacher"),
-                        location = item.optString("location"),
-                        dayOfWeek = item.optInt("dayOfWeek", 1).coerceIn(1, 7),
-                        startMinute = item.optInt("startMinute", 8 * 60).coerceIn(0, 1439),
-                        endMinute = item.optInt("endMinute", 9 * 60).coerceIn(0, 1439),
-                        note = item.optString("note"),
-                        reminderEnabled = item.optBoolean("reminderEnabled", false),
-                        reminderMinutesBefore = item.optInt("reminderMinutesBefore", 10).coerceIn(0, 180)
-                    ))
-                }
+            committed = true
+            // Old media is deliberately retained: settings from legacy backups without a settings
+            // section, and Android process interruption, can still refer to an older generation.
+            return "恢复完成：${events.size} 条记录、${courses.size} 门课程" +
+                if (missingImages > 0) "；原备份缺少 $missingImages 张图片，已恢复可用内容" else ""
+        } catch (e: Exception) {
+            if (settingsTouched && !committed) {
+                try { settings.replace(oldSettings) } catch (rollback: Exception) { e.addSuppressed(rollback) }
             }
-            db.replaceAll(events, courses)
-
-            root.optJSONObject("settings")?.let { json ->
-                settings.theme = runCatching {
-                    ThemePreset.valueOf(json.optString("theme", ThemePreset.CREAM.name))
-                }.getOrDefault(ThemePreset.CREAM)
-                settings.backgroundStyle = runCatching {
-                    BackgroundStyle.valueOf(json.optString("backgroundStyle", BackgroundStyle.LIGHT.name))
-                }.getOrDefault(BackgroundStyle.LIGHT)
-                settings.glassStrength = json.optDouble("glassStrength", 0.60).toFloat().coerceIn(0f, 1f)
-
-                val restoredWallpaper = if (json.optString("wallpaper") == "custom") {
-                    restoreMedia(tempDir, json.optString("wallpaperEntry"), restoredMediaDir, "wallpaper")
-                } else ""
-                settings.wallpaper = restoredWallpaper
-                settings.customBackgroundEnabled = json.optBoolean("customBackgroundEnabled", restoredWallpaper.isNotBlank()) && restoredWallpaper.isNotBlank()
-
-                val restoredWidget = if (json.optString("widgetBackground") == "custom") {
-                    restoreMedia(tempDir, json.optString("widgetBackgroundEntry"), restoredMediaDir, "widget-background")
-                } else ""
-                settings.widgetBackgroundUri = restoredWidget
-                settings.widgetBackgroundColor = json.optInt("widgetBackgroundColor", 0xFFF4F1FA.toInt())
-                settings.widgetTextMode = runCatching {
-                    WidgetTextMode.valueOf(json.optString("widgetTextMode", WidgetTextMode.AUTO.name))
-                }.getOrDefault(WidgetTextMode.AUTO)
-                settings.widgetAccentColor = json.optInt("widgetAccentColor", 0xFF7B61D1.toInt())
-                settings.widgetOpacity = json.optDouble("widgetOpacity", 0.82).toFloat().coerceIn(0.35f, 1f)
-                settings.widgetFrosted = json.optBoolean("widgetFrosted", true)
-            }
-
-            return "恢复完成：${events.size} 条记录、${courses.size} 门课程"
+            throw e
         } finally {
+            if (!committed) newMedia.deleteRecursively()
             tempDir.deleteRecursively()
         }
     }
 
-    private fun copyUriToZip(uriString: String, entryName: String, zip: ZipOutputStream) {
-        val input = runCatching { context.contentResolver.openInputStream(Uri.parse(uriString)) }.getOrNull() ?: return
-        input.use {
-            zip.putNextEntry(ZipEntry(entryName))
-            try { it.copyTo(zip) } finally { zip.closeEntry() }
-        }
+    private fun JSONObject.text(key: String, default: String = ""): String {
+        if (!has(key)) return default
+        val value = get(key)
+        require(value is String) { "字段 $key 应为文字" }
+        return value
     }
 
-    private fun restoreMedia(tempDir: File, entryName: String, restoredMediaDir: File, prefix: String): String {
-        if (entryName.isBlank()) return ""
-        val source = runCatching { safeTarget(tempDir, entryName) }.getOrNull() ?: return ""
-        if (!source.exists()) return ""
-        val target = File(restoredMediaDir, "$prefix-${UUID.randomUUID()}.bin")
-        source.copyTo(target, overwrite = true)
-        return Uri.fromFile(target).toString()
+    private fun JSONObject.flag(key: String, default: Boolean): Boolean {
+        if (!has(key)) return default
+        val value = get(key)
+        require(value is Boolean) { "字段 $key 应为开关" }
+        return value
+    }
+
+    private fun JSONObject.number(key: String, default: Long): Long {
+        if (!has(key)) return default
+        val value = get(key)
+        require(value is Number && value.toDouble().isFinite() && value.toDouble() == value.toLong().toDouble()) { "字段 $key 应为整数" }
+        return value.toLong()
+    }
+
+    private fun JSONObject.integer(key: String, default: Int): Int {
+        val value = number(key, default.toLong())
+        require(value in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong()) { "整数超出范围：$key" }
+        return value.toInt()
+    }
+
+    private fun JSONObject.fraction(key: String, default: Float, min: Float): Float {
+        if (!has(key)) return default
+        val value = get(key)
+        require(value is Number && value.toFloat().isFinite() && value.toFloat() in min..1f) { "字段 $key 超出范围" }
+        return value.toFloat()
     }
 
     private fun safeTarget(base: File, name: String): File {
@@ -248,6 +306,4 @@ class BackupService(private val context: Context) {
         return target
     }
 
-    private fun formatDateTime(value: Long): String = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(value))
-    private fun csvEscape(value: String): String = if (value.any { it == ',' || it == '"' || it == '\n' || it == '\r' }) "\"${value.replace("\"", "\"\"")}\"" else value
 }

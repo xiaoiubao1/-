@@ -13,17 +13,17 @@ class ImportService(private val context: Context) {
 
     fun importInto(database: EventDatabase, uri: Uri): Result {
         val name = displayName(uri).lowercase(Locale.getDefault())
-        val text = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+        val text = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText().removePrefix("\uFEFF") }
             ?: return Result(0, 0, "无法读取这个文件")
 
         return try {
-            when {
+            database.transaction { when {
                 name.endsWith(".json") || text.trimStart().startsWith("[") || text.trimStart().startsWith("{") ->
                     importJson(database, text)
                 name.endsWith(".csv") || text.lineSequence().firstOrNull().orEmpty().contains(",") ->
                     importCsv(database, text)
                 else -> importText(database, text)
-            }
+            } }
         } catch (e: Exception) {
             Result(0, 0, "导入失败：${e.message ?: "文件格式无法识别"}")
         }
@@ -56,7 +56,8 @@ class ImportService(private val context: Context) {
                     eventTime = parseTimeValue(obj.opt("eventTime") ?: obj.opt("event_time") ?: obj.opt("时间")),
                     reminderEnabled = parseBoolean(obj.opt("reminderEnabled") ?: obj.opt("reminder") ?: obj.opt("提醒")),
                     completed = parseBoolean(obj.opt("completed") ?: obj.opt("done") ?: obj.opt("已完成")),
-                    imageUri = firstNonBlank(obj, "imageUri", "image_uri", "图片")
+                    imageUri = firstNonBlank(obj, "imageUri", "image_uri", "图片"),
+                    createdAt = obj.optLong("createdAt", System.currentTimeMillis())
                 )
             )
             imported++
@@ -65,10 +66,7 @@ class ImportService(private val context: Context) {
     }
 
     private fun importCsv(database: EventDatabase, text: String): Result {
-        val rows = text.lineSequence()
-            .filter { it.isNotBlank() }
-            .map(::parseCsvLine)
-            .toList()
+        val rows = CsvCodec.parse(text)
         if (rows.isEmpty()) return Result(0, 0, "CSV 文件没有可导入内容")
 
         val knownHeaders = setOf(
@@ -86,6 +84,8 @@ class ImportService(private val context: Context) {
         val locationIndex = if (hasHeader) indexOf("location", "地点", "位置") else 2
         val timeIndex = if (hasHeader) indexOf("eventtime", "event_time", "time", "时间") else 3
         val reminderIndex = if (hasHeader) indexOf("reminderenabled", "reminder", "提醒") else 4
+        val imageIndex = if (hasHeader) indexOf("imageuri", "image_uri", "图片") else 6
+        val createdIndex = if (hasHeader) indexOf("createdat", "created_at", "创建时间") else 7
         val completedIndex = if (hasHeader) indexOf("completed", "done", "已完成") else 5
 
         fun List<String>.getSafe(index: Int): String = if (index >= 0 && index < size) this[index].trim() else ""
@@ -104,7 +104,9 @@ class ImportService(private val context: Context) {
                         location = row.getSafe(locationIndex),
                         eventTime = parseTimeValue(row.getSafe(timeIndex)),
                         reminderEnabled = parseBoolean(row.getSafe(reminderIndex)),
-                        completed = parseBoolean(row.getSafe(completedIndex))
+                        completed = parseBoolean(row.getSafe(completedIndex)),
+                        imageUri = row.getSafe(imageIndex),
+                        createdAt = row.getSafe(createdIndex).toLongOrNull() ?: System.currentTimeMillis()
                     )
                 )
                 imported++
@@ -120,31 +122,6 @@ class ImportService(private val context: Context) {
             imported++
         }
         return Result(imported, 0, "文本导入完成：每行作为一条记录，共 $imported 条")
-    }
-
-    private fun parseCsvLine(line: String): List<String> {
-        val result = mutableListOf<String>()
-        val current = StringBuilder()
-        var quoted = false
-        var i = 0
-        while (i < line.length) {
-            val c = line[i]
-            when {
-                c == '"' && quoted && i + 1 < line.length && line[i + 1] == '"' -> {
-                    current.append('"')
-                    i++
-                }
-                c == '"' -> quoted = !quoted
-                c == ',' && !quoted -> {
-                    result += current.toString()
-                    current.clear()
-                }
-                else -> current.append(c)
-            }
-            i++
-        }
-        result += current.toString()
-        return result
     }
 
     private fun parseTimeValue(value: Any?): Long? {
@@ -180,6 +157,7 @@ class ImportService(private val context: Context) {
     }
 
     private fun displayName(uri: Uri): String {
+        if (uri.scheme != "content") return uri.lastPathSegment.orEmpty()
         context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
             val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
             if (index >= 0 && cursor.moveToFirst()) return cursor.getString(index).orEmpty()

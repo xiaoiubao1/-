@@ -7,7 +7,8 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
+import com.xiaoiubao.suixinji.ImageLoader
+import kotlinx.coroutines.*
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
@@ -26,14 +27,29 @@ import java.util.Date
 
 class EventWidgetProvider : AppWidgetProvider() {
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
-        appWidgetIds.forEach { id -> updateOne(context, appWidgetManager, id) }
+        val pending = goAsync()
+        scope.launch {
+            try { appWidgetIds.forEach { id -> updateOne(context.applicationContext, appWidgetManager, id) } }
+            catch (e: Exception) { android.util.Log.e("SuixinjiWidget", "Widget update failed", e) }
+            finally { pending.finish() }
+        }
     }
 
     companion object {
-        fun updateAll(context: Context) {
-            val manager = AppWidgetManager.getInstance(context)
-            val component = ComponentName(context, EventWidgetProvider::class.java)
-            manager.getAppWidgetIds(component).forEach { id -> updateOne(context, manager, id) }
+        private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        private var updateJob: Job? = null
+        @Synchronized fun updateAll(context: Context) {
+            val app = context.applicationContext
+            updateJob?.cancel()
+            updateJob = scope.launch {
+                delay(200)
+                try {
+                    val manager = AppWidgetManager.getInstance(app)
+                    val component = ComponentName(app, EventWidgetProvider::class.java)
+                    manager.getAppWidgetIds(component).forEach { id -> ensureActive(); updateOne(app, manager, id) }
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) { android.util.Log.e("SuixinjiWidget", "Widget update failed", e) }
+            }
         }
 
         private fun updateOne(context: Context, manager: AppWidgetManager, widgetId: Int) {
@@ -71,6 +87,7 @@ class EventWidgetProvider : AppWidgetProvider() {
             views.setTextViewText(R.id.widget_course, courseText)
 
             val launchIntent = Intent(context, MainActivity::class.java).apply {
+                data = Uri.parse("suixinji://widget/$widgetId")
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
                 event?.id?.takeIf { it > 0 }?.let { putExtra(MainActivity.EXTRA_EVENT_ID, it) }
             }
@@ -97,14 +114,11 @@ class EventWidgetProvider : AppWidgetProvider() {
             val backgroundColor = applyOpacity(settings.widgetBackgroundColor, settings.widgetOpacity)
             canvas.drawColor(backgroundColor)
 
-            val custom = settings.widgetBackgroundUri.takeIf { it.isNotBlank() }?.let { uri ->
-                runCatching {
-                    context.contentResolver.openInputStream(Uri.parse(uri))?.use(BitmapFactory::decodeStream)
-                }.getOrNull()
+            val custom = settings.widgetBackgroundUri.takeIf { it.isNotBlank() }?.let {
+                ImageLoader.load(context, it, width, height)
             }
             if (custom != null) {
                 drawCenterCrop(canvas, custom, width, height, settings.widgetOpacity)
-                custom.recycle()
             }
 
             if (settings.widgetFrosted) {

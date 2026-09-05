@@ -83,6 +83,20 @@ class EventDatabase(context: Context) :
         return items
     }
 
+    fun getEvent(id: Long): EventNote? = readableDatabase.query(
+        "events", null, "id = ?", arrayOf(id.toString()), null, null, null, "1"
+    ).use { if (it.moveToFirst()) it.toEventNote() else null }
+
+    fun <T> transaction(block: () -> T): T {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val result = block()
+            db.setTransactionSuccessful()
+            return result
+        } finally { db.endTransaction() }
+    }
+
     fun getNextEvent(now: Long = System.currentTimeMillis()): EventNote? {
         val withTime = readableDatabase.query(
             "events",
@@ -191,7 +205,7 @@ class EventDatabase(context: Context) :
         writableDatabase.delete("courses", "id = ?", arrayOf(id.toString()))
     }
 
-    fun replaceAll(events: List<EventNote>, courses: List<Course>) {
+    fun replaceAll(events: List<EventNote>, courses: List<Course>, beforeCommit: () -> Unit = {}) {
         val db = writableDatabase
         db.beginTransaction()
         try {
@@ -203,6 +217,7 @@ class EventDatabase(context: Context) :
             courses.forEach { course ->
                 db.insertOrThrow("courses", null, course.copy(id = 0).toContentValues())
             }
+            beforeCommit()
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()

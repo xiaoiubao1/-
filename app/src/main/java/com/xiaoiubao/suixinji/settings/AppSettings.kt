@@ -78,6 +78,23 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean(KEY_WIDGET_FROSTED, true)
         set(value) { prefs.edit().putBoolean(KEY_WIDGET_FROSTED, value).apply() }
 
+    fun snapshot(): Map<String, *> = prefs.all.toMap()
+
+    fun replace(values: Map<String, *>) {
+        val editor = prefs.edit().clear()
+        values.forEach { (key, value) ->
+            when (value) {
+                is String -> editor.putString(key, value)
+                is Boolean -> editor.putBoolean(key, value)
+                is Float -> editor.putFloat(key, value)
+                is Int -> editor.putInt(key, value)
+                is Long -> editor.putLong(key, value)
+                else -> error("不支持的设置类型：$key")
+            }
+        }
+        check(editor.commit()) { "无法保存设置" }
+    }
+
     companion object {
         private const val KEY_THEME = "theme"
         private const val KEY_BACKGROUND_STYLE = "background_style"

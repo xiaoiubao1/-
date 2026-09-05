@@ -36,6 +36,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        viewModel.rescheduleReminders()
+    }
+
     companion object {
         const val EXTRA_EVENT_ID = "extra_event_id"
         const val EXTRA_COURSE_ID = "extra_course_id"

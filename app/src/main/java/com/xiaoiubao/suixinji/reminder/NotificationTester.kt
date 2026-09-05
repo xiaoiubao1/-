@@ -18,10 +18,11 @@ object NotificationTester {
     private const val NOTIFICATION_ID = 90001
 
     fun canNotify(context: Context): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+        NotificationManagerCompat.from(context).areNotificationsEnabled() && (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
-            PackageManager.PERMISSION_GRANTED
+            PackageManager.PERMISSION_GRANTED)
 
+    @android.annotation.SuppressLint("MissingPermission") // canNotify checks runtime permission; handle revocation too.
     fun send(context: Context) {
         if (!canNotify(context)) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -33,6 +34,7 @@ object NotificationTester {
             )
         }
         val intent = Intent(context, MainActivity::class.java).apply {
+            data = android.net.Uri.parse("suixinji://notification/test")
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
         val pendingIntent = PendingIntent.getActivity(
@@ -47,13 +49,14 @@ object NotificationTester {
             .setContentText("如果你看到这条通知，说明通知权限与通知渠道工作正常。")
             .setStyle(
                 NotificationCompat.BigTextStyle().bigText(
-                    "如果你看到这条通知，说明通知权限与通知渠道工作正常。现在可以放心使用事件提醒啦。"
+                    "如果你看到这条通知，说明通知权限与通知渠道工作正常。准时提醒还需要在设置中检查闹钟权限。"
                 )
             )
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
             .build()
-        NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification)
+        try { NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification) }
+        catch (_: SecurityException) { /* Permission revoked between check and notify. */ }
     }
 }
