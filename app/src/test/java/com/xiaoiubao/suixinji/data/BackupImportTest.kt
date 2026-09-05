@@ -166,7 +166,9 @@ class BackupImportTest {
     }
 
     @Test fun oversizedManifestIsRejectedBeforeCreatingAnUnrestorableBackup() {
-        db.update(old.copy(details = "x".repeat(8 * 1024 * 1024)))
+        // Exercise total archive size with ordinary rows, within Android CursorWindow limits.
+        val details = "x".repeat(64 * 1024)
+        db.replaceAll(List(129) { EventNote(title = "记录 " + it, details = details) }, emptyList())
         val file = File(app.cacheDir, "oversized.suixinji")
         assertThrows(IllegalArgumentException::class.java) { backup.createBackup(db, settings, Uri.fromFile(file)) }
         assertFalse(file.exists())
