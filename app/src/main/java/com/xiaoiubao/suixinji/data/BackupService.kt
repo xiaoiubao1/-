@@ -12,6 +12,7 @@ import java.io.BufferedWriter
 import java.io.File
 import java.io.OutputStreamWriter
 import java.util.UUID
+import kotlin.concurrent.withLock
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
@@ -19,7 +20,7 @@ import java.util.zip.ZipOutputStream
 class BackupService(private val context: Context) {
 
     fun exportEventsCsv(db: EventDatabase, uri: Uri): String {
-        val events = db.getAll()
+        val events = DataAccess.lock.withLock { db.getAll() }
         context.contentResolver.openOutputStream(uri)?.use { output ->
             BufferedWriter(OutputStreamWriter(output, Charsets.UTF_8)).use { writer ->
                 writer.write("\uFEFF")
@@ -46,8 +47,7 @@ class BackupService(private val context: Context) {
     }
 
     fun createBackup(db: EventDatabase, settings: AppSettings, uri: Uri): String {
-        val events = db.getAll()
-        val courses = db.getCourses()
+        val (events, courses) = DataAccess.lock.withLock { db.getAll() to db.getCourses() }
         val wallpaper = settings.wallpaper
         val widgetBackground = settings.widgetBackgroundUri
         val staging = File(context.cacheDir, "backup-${UUID.randomUUID()}").apply { check(mkdirs()) }
@@ -243,13 +243,24 @@ class BackupService(private val context: Context) {
                     "widget_frosted" to it.flag("widgetFrosted", true)
                 ))
             }
-            db.replaceAll(events, courses) {
-                if (json != null) {
-                    settingsTouched = true
-                    settings.replace(nextSettings)
+            // File copying/decompression must not hold the reminder delivery lock.
+            DataAccess.lock.withLock {
+                try {
+                    db.replaceAll(events, courses) {
+                        if (json != null) {
+                            settingsTouched = true
+                            settings.replace(nextSettings)
+                        }
+                    }
+                    committed = true
+                } catch (e: Exception) {
+                    if (settingsTouched) {
+                        try { settings.replace(oldSettings); settingsTouched = false }
+                        catch (rollback: Exception) { e.addSuppressed(rollback) }
+                    }
+                    throw e
                 }
             }
-            committed = true
             // Old media is deliberately retained: settings from legacy backups without a settings
             // section, and Android process interruption, can still refer to an older generation.
             return "恢复完成：${events.size} 条记录、${courses.size} 门课程" +

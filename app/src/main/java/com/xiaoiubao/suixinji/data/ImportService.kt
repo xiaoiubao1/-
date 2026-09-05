@@ -7,6 +7,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Locale
+import kotlin.concurrent.withLock
 
 class ImportService(private val context: Context) {
     data class Result(val imported: Int, val skipped: Int, val message: String)
@@ -17,13 +18,13 @@ class ImportService(private val context: Context) {
             ?: return Result(0, 0, "无法读取这个文件")
 
         return try {
-            database.transaction { when {
+            DataAccess.lock.withLock { database.transaction { when {
                 name.endsWith(".json") || text.trimStart().startsWith("[") || text.trimStart().startsWith("{") ->
                     importJson(database, text)
                 name.endsWith(".csv") || text.lineSequence().firstOrNull().orEmpty().contains(",") ->
                     importCsv(database, text)
                 else -> importText(database, text)
-            } }
+            } } }
         } catch (e: Exception) {
             Result(0, 0, "导入失败：${e.message ?: "文件格式无法识别"}")
         }

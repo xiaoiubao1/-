@@ -41,20 +41,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var editingEvent by mutableStateOf<EventNote?>(null)
     var editingCourse by mutableStateOf<Course?>(null)
 
-    private fun operation(label: String, showBusy: Boolean = true, onSuccess: () -> Unit = {}, block: (EventDatabase) -> String?) {
+    private fun operation(label: String, showBusy: Boolean = true, lockData: Boolean = true, onSuccess: () -> Unit = {}, block: (EventDatabase) -> String?) {
         viewModelScope.launch {
             gate.withLock {
                 if (showBusy) _busy.value = true
                 try {
                     val message = withContext(Dispatchers.IO) {
-                        DataAccess.lock.withDataLock {
-                            EventDatabase(getApplication()).use { db ->
-                                val result = block(db)
-                                _events.value = db.getAll()
-                                _courses.value = db.getCourses()
-                                result
-                            }
+                        fun execute(): String? = EventDatabase(getApplication()).use { db ->
+                            val result = block(db)
+                            _events.value = db.getAll()
+                            _courses.value = db.getCourses()
+                            result
                         }
+                        if (lockData) DataAccess.lock.withDataLock { execute() } else execute()
                     }
                     onSuccess()
                     if (message != null) _importMessage.value = message
@@ -106,28 +105,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         reminderResult { CourseReminderScheduler.cancel(getApplication(), course.id) }
     }
 
-    fun importFromUri(uri: Uri) = operation("导入") { db ->
+    fun importFromUri(uri: Uri) = operation("导入", lockData = false) { db ->
         val result = importer.importInto(db, uri)
         result.message + (reminderResult { scheduleAll(db) }?.let { "；$it" } ?: "")
     }
-    fun exportCsv(uri: Uri) = operation("CSV 导出") { backupService.exportEventsCsv(it, uri) }
-    fun createBackup(uri: Uri) = operation("备份") { backupService.createBackup(it, settings, uri) }
+    fun exportCsv(uri: Uri) = operation("CSV 导出", lockData = false) { backupService.exportEventsCsv(it, uri) }
+    fun createBackup(uri: Uri) = operation("备份", lockData = false) { backupService.createBackup(it, settings, uri) }
 
-    fun restoreBackup(uri: Uri) = operation("恢复", onSuccess = { editingEvent = null; editingCourse = null }) { db ->
+    fun restoreBackup(uri: Uri) = operation("恢复", lockData = false, onSuccess = { editingEvent = null; editingCourse = null }) { db ->
         val oldEvents = db.getAll()
         val oldCourses = db.getCourses()
         val message = backupService.restoreBackup(db, settings, uri)
         // This point is reached only after validation and the data commit succeed.
         val warning = reminderResult {
-            oldEvents.forEach { ReminderScheduler.cancel(getApplication(), it.id) }
-            oldCourses.forEach { CourseReminderScheduler.cancel(getApplication(), it.id) }
-            scheduleAll(db)
+            DataAccess.lock.withDataLock {
+                oldEvents.forEach { ReminderScheduler.cancel(getApplication(), it.id) }
+                oldCourses.forEach { CourseReminderScheduler.cancel(getApplication(), it.id) }
+                scheduleAll(db)
+            }
         }
         message + (warning?.let { "；$it" } ?: "")
     }
 
     fun clearImportMessage() { _importMessage.value = null }
-    private fun scheduleAll(db: EventDatabase) {
+    private fun scheduleAll(db: EventDatabase) = DataAccess.lock.withDataLock {
         db.getAll().forEach { ReminderScheduler.schedule(getApplication(), it) }
         db.getCourses().forEach { CourseReminderScheduler.schedule(getApplication(), it) }
     }
