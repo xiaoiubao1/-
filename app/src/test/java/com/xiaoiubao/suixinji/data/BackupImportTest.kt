@@ -165,6 +165,14 @@ class BackupImportTest {
         assertEquals(event.copy(id = restored.id), restored)
     }
 
+    @Test fun oversizedManifestIsRejectedBeforeCreatingAnUnrestorableBackup() {
+        db.update(old.copy(details = "x".repeat(8 * 1024 * 1024)))
+        val file = File(app.cacheDir, "oversized.suixinji")
+        assertThrows(IllegalArgumentException::class.java) { backup.createBackup(db, settings, Uri.fromFile(file)) }
+        assertFalse(file.exists())
+        assertEquals("old image bytes", oldImage.readText())
+    }
+
     @Test fun malformedCsvDoesNotPartiallyInsertRecords() {
         val file = File(app.cacheDir, "broken.csv").apply { writeText("title,details\n有效,第一条\n\"未闭合") }
         val result = ImportService(app).importInto(db, Uri.fromFile(file))

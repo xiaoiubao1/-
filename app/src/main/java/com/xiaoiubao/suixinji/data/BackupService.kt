@@ -18,6 +18,11 @@ import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
 class BackupService(private val context: Context) {
+    companion object {
+        private const val MAX_MANIFEST_BYTES = 8L * 1024 * 1024
+        private const val MAX_ARCHIVE_BYTES = 512L * 1024 * 1024
+        private const val MAX_ENTRIES = 10000
+    }
 
     fun exportEventsCsv(db: EventDatabase, uri: Uri): String {
         val events = DataAccess.lock.withLock { db.getAll() }
@@ -124,12 +129,18 @@ class BackupService(private val context: Context) {
         }
         root.put("courses", courseArray)
 
+        // Never report success for an archive our own restore would reject.
+        val manifest = root.toString(2).toByteArray(Charsets.UTF_8)
+        val mediaFiles = staging.walkTopDown().filter { it.isFile }.toList()
+        require(manifest.size <= MAX_MANIFEST_BYTES) { "备份清单超过 8 MiB，无法生成可恢复的备份" }
+        require(mediaFiles.size + 1 <= MAX_ENTRIES) { "备份文件数量过多" }
+        require(mediaFiles.sumOf { it.length() } + manifest.size <= MAX_ARCHIVE_BYTES) { "备份内容超过 512 MiB" }
         context.contentResolver.openOutputStream(uri)?.use { raw ->
             ZipOutputStream(raw).use { zip ->
                 zip.putNextEntry(ZipEntry("backup.json"))
-                zip.write(root.toString(2).toByteArray(Charsets.UTF_8))
+                zip.write(manifest)
                 zip.closeEntry()
-                staging.walkTopDown().filter { it.isFile }.forEach { file ->
+                mediaFiles.forEach { file ->
                     zip.putNextEntry(ZipEntry(file.relativeTo(staging).invariantSeparatorsPath))
                     file.inputStream().use { it.copyTo(zip) }
                     zip.closeEntry()
@@ -160,7 +171,7 @@ class BackupService(private val context: Context) {
                     val buffer = ByteArray(8192)
                     var entry = zip.nextEntry
                     while (entry != null) {
-                        require(++count <= 10000) { "备份文件数量过多" }
+                        require(++count <= MAX_ENTRIES) { "备份文件数量过多" }
                         val target = safeTarget(tempDir, entry.name)
                         require(names.add(target.canonicalPath)) { "备份含有重复文件" }
                         if (!entry.isDirectory) {
@@ -169,7 +180,7 @@ class BackupService(private val context: Context) {
                                 var n = zip.read(buffer)
                                 while (n != -1) {
                                     total += n
-                                    require(total <= 512L * 1024 * 1024) { "备份解压后超过 512 MiB" }
+                                    require(total <= MAX_ARCHIVE_BYTES) { "备份解压后超过 512 MiB" }
                                     output.write(buffer, 0, n)
                                     n = zip.read(buffer)
                                 }
@@ -182,7 +193,7 @@ class BackupService(private val context: Context) {
             } ?: error("无法读取备份文件")
 
             val rootFile = File(tempDir, "backup.json")
-            require(rootFile.isFile && rootFile.length() <= 8L * 1024 * 1024) { "备份清单不存在或过大" }
+            require(rootFile.isFile && rootFile.length() <= MAX_MANIFEST_BYTES) { "备份清单不存在或过大" }
             val root = JSONObject(rootFile.readText(Charsets.UTF_8))
             require(root.text("format") == "suixinji-backup") { "备份格式不受支持" }
             require(root.number("version", -1) in 1L..3L) { "备份版本不受支持" }

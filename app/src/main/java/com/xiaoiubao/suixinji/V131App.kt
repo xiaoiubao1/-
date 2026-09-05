@@ -40,6 +40,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -464,7 +465,8 @@ private fun V131Timetable(
     val currentDay = v131CurrentWeekday()
     val dates = v131CurrentWeekDates()
     val now = Calendar.getInstance()
-    val dateText = SimpleDateFormat("yyyy/M/d", Locale.getDefault()).format(Date())
+    val locale = LocalConfiguration.current.locales[0]
+    val dateText = SimpleDateFormat("yyyy/M/d", locale).format(Date())
 
     Column(modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 7.dp, vertical = 5.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -889,6 +891,7 @@ private fun V131CourseEditor(course: Course, onDismiss: () -> Unit, onDelete: ()
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun V131DateTimeSheet(initial: Long?, onDismiss: () -> Unit, onConfirm: (Long) -> Unit) {
+    val locale = LocalConfiguration.current.locales[0]
     val initialCalendar = remember(initial) { Calendar.getInstance().apply { timeInMillis = initial ?: System.currentTimeMillis() } }
     var selectedDay by rememberSaveable(initial) { mutableLongStateOf(v131StartOfDay(initialCalendar.timeInMillis)) }
     var hour by rememberSaveable(initial) { mutableIntStateOf(initialCalendar.get(Calendar.HOUR_OF_DAY)) }
@@ -911,7 +914,7 @@ private fun V131DateTimeSheet(initial: Long?, onDismiss: () -> Unit, onConfirm: 
                         label = {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text(when (offset) { 0 -> "今天"; 1 -> "明天"; 2 -> "后天"; else -> v131WeekdayFromMillis(dayMillis) }, fontSize = 10.sp)
-                                Text(SimpleDateFormat("M/d", Locale.getDefault()).format(Date(dayMillis)), fontSize = 9.sp)
+                                Text(SimpleDateFormat("M/d", locale).format(Date(dayMillis)), fontSize = 9.sp)
                             }
                         }
                     )
