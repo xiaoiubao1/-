@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   build:
+    if: github.event_name != 'push' || github.ref != 'refs/heads/main' || !contains(github.event.head_commit.message, '[publish verified v1.3.3]')
     runs-on: ubuntu-latest
 
     steps:
@@ -150,4 +151,67 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "随心记 v1.3.3 · 数据安全与提醒修复 #${GITHUB_RUN_NUMBER}" \
-            --notes "v1.3.3：修复备份恢复、CSV 往返、提醒、日期、课程显示、草稿和图片加载问题。\n\n固定下载地址：\nhttps://github.com/${GITHUB_REPOSITORY}/releases/latest/download/suixinji.apk"
+            --notes-file ".github/release-notes/v1.3.3.md"
+
+  publish-verified-v133:
+    name: Publish verified v1.3.3
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[publish verified v1.3.3]')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_RUN_ID: "33985651900"
+      SOURCE_SHA: "178d55deec9e33b8030ec8cf11e5c69af238882b"
+      APK_SHA256: "36ba6e726698490e032cc2c03b4ffeadef882d713d5e3abb4c32919574742ef9"
+      TAG: "v1.3.3"
+
+    steps:
+      - name: Checkout release notes
+        uses: actions/checkout@v4
+
+      - name: Verify and download the successful main build
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" > source-run.json
+          python3 - <<'PYVERIFY'
+          import json, os
+          run = json.load(open("source-run.json"))
+          assert run["conclusion"] == "success" and run["status"] == "completed"
+          assert run["head_sha"] == os.environ["SOURCE_SHA"]
+          assert run["head_branch"] == "main" and run["event"] == "push"
+          assert run["path"] == ".github/workflows/android-build.yml"
+          PYVERIFY
+          gh run download "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" --name suixinji-release-apk --dir release-assets
+
+      - name: Verify the exact APK approved for publication
+        working-directory: release-assets
+        run: |
+          sha256sum --check suixinji.apk.sha256
+          python3 - <<'PYVERIFY'
+          import hashlib, os, pathlib
+          apk = pathlib.Path("suixinji.apk")
+          assert hashlib.sha256(apk.read_bytes()).hexdigest() == os.environ["APK_SHA256"]
+          assert pathlib.Path("suixinji.apk.cert.txt").stat().st_size > 0
+          PYVERIFY
+
+      - name: Upload assets and publish as latest
+        run: |
+          gh release create "$TAG" \
+            release-assets/suixinji.apk \
+            release-assets/suixinji.apk.sha256 \
+            release-assets/suixinji.apk.cert.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$SOURCE_SHA" \
+            --title "随心记 v1.3.3 · 数据安全与提醒修复" \
+            --notes-file .github/release-notes/v1.3.3.md \
+            --draft
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets > release-assets.json
+          python3 - <<'PYVERIFY'
+          import json
+          assets = json.load(open("release-assets.json"))["assets"]
+          expected = {"suixinji.apk", "suixinji.apk.sha256", "suixinji.apk.cert.txt"}
+          assert {asset["name"] for asset in assets} == expected
+          assert all(asset["size"] > 0 for asset in assets)
+          PYVERIFY
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
