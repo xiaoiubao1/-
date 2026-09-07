@@ -199,7 +199,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun confirmCourseImport(preview: CourseImportPreview, selected: Set<Int>, replace: Boolean) = operation("导入课程", onSuccess = { _coursePreview.value = null }) { db ->
         require(_coursePreview.value === preview) { "预览已过期，请重新读取" }
-        require(!replace || preview.skippedRows == 0) { "存在未识别内容时不能覆盖课表" }
+        require(!replace || (preview.allowReplace && preview.skippedRows == 0)) { "仅完整识别的课程 CSV 可以替换课表，网页导入请追加或新建学期" }
         val chosen = preview.courses.filterIndexed { index, _ -> index in selected }
         require(chosen.isNotEmpty()) { "请至少选择一条课程" }
         val old = if (replace) db.getCourses().filter { it.semesterId == preview.semesterId } else emptyList()

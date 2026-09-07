@@ -216,6 +216,7 @@ class BackupService(private val context: Context) {
             val semesters = if (version < 4) listOf(Semester.legacy()) else root.getJSONArray("semesters").let { array ->
                 require(array.length() in 1..100) { "学期数量无效" }
                 (0 until array.length()).map { index -> array.getJSONObject(index).let { item ->
+                    require(item.has("startDate")) { "学期缺少起始日字段" }
                     Semester(item.number("id", -1), item.text("name"), item.text("startDate"), item.integer("totalWeeks", -1))
                         .also { it.validate(); require(it.id in 1..1_000_000_000L) { "学期 ID 无效" } }
                 } }

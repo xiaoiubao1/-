@@ -12,7 +12,7 @@ import java.io.OutputStreamWriter
 data class CourseImportPreview(
     val semesterId: Long, val source: String, val courses: List<Course>,
     val warnings: List<String> = emptyList(), val skippedRows: Int = 0,
-    val duplicateCount: Int = 0, val conflictCount: Int = 0
+    val duplicateCount: Int = 0, val conflictCount: Int = 0, val allowReplace: Boolean = false
 )
 
 class CourseImportService(private val context: Context) {
@@ -103,7 +103,7 @@ class CourseImportService(private val context: Context) {
                 catch (e: IllegalStateException) { skipped++; if (warnings.size < 30) warnings += "第 ${index + 2} 行：${e.message}" }
             }
             require(result.isNotEmpty()) { "未识别到有效课程。${warnings.take(3).joinToString("；")}" }
-            return CourseImportPreview(semester.id, "课程 CSV", result.distinctBy { it.importKey() }, warnings, skipped)
+            return CourseImportPreview(semester.id, "课程 CSV", result.distinctBy { it.importKey() }, warnings, skipped, allowReplace = skipped == 0)
         }
 
         fun parseHtml(html: String, semester: Semester, periods: List<CoursePeriod>): CourseImportPreview {
@@ -203,7 +203,7 @@ class CourseImportService(private val context: Context) {
             }
             require(result.isNotEmpty()) { "未识别到课程。请打开含周次的完整学期课表；当前页面可能需要专用学校适配。${warnings.take(2).joinToString("；")}" }
             return CourseImportPreview(semester.id, "教务网页 / HTML", result.distinctBy { it.importKey() },
-                listOf("请逐项核对周次、节次和地点。只识别有明确周次的列表或周课表；未标注的教师/地点会保留在原文备注中。") + warnings, skipped)
+                listOf("网页 / HTML 只能追加导入。如需重建课表，请先新建学期。", "请逐项核对周次、节次和地点。只识别有明确周次的列表或周课表；未标注的教师/地点会保留在原文备注中。") + warnings, skipped)
         }
     }
 }

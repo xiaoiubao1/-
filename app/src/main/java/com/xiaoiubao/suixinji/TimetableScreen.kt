@@ -285,7 +285,7 @@ private fun CoursePreviewDialog(preview: CourseImportPreview, termName: String, 
                 HorizontalDivider()
             }
             item {
-                Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(replace, { replace = it }, enabled = preview.skippedRows == 0); Text("替换此学期全部课程", style = MaterialTheme.typography.bodySmall) }
+                Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(replace, { replace = it }, enabled = preview.allowReplace && preview.skippedRows == 0); Text("替换此学期全部课程", style = MaterialTheme.typography.bodySmall) }
                 Text(if (replace) "确认后删除此学期的旧课程及提醒，再导入勾选内容。" else "追加导入，保留现有课程并跳过完全重复的安排。", style = MaterialTheme.typography.bodySmall)
                 Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(checked, { checked = it }); Text("我已核对周次、作息时间和提示", style = MaterialTheme.typography.bodySmall) }
             }

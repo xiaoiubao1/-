@@ -12,10 +12,16 @@ class CourseImportTest {
             "错误课程,,,周二,25:00,26:00,1-20,\r\n"
         val preview = CourseImportService.parseCsv(csv, semester, periods)
         assertEquals(1, preview.skippedRows)
+        assertFalse(preview.allowReplace)
         assertEquals(1, preview.courses.size)
         assertEquals("第一行\n第二行", preview.courses.single().note)
         assertEquals((1..16).filter { it % 2 == 1 }, preview.courses.single().weeks)
         assertFalse(preview.courses.single().reminderEnabled)
+    }
+    @Test fun onlyCompleteCsvCanOfferReplacement() {
+        val preview = CourseImportService.parseCsv("name,day,periods,weeks\n数学,1,1-2,1-20", semester, periods)
+        assertTrue(preview.allowReplace)
+        assertEquals(0, preview.skippedRows)
     }
     @Test fun notesCsvAndMissingWeeksNeverBecomeCourseImports() {
         assertTrue(runCatching { CourseImportService.parseCsv("title,details\n记录,内容", semester, periods) }.isFailure)
@@ -38,6 +44,7 @@ class CourseImportTest {
             <tr><td>第2节</td><td></td><td></td><td></td><td></td></tr></table>"""
         val preview = CourseImportService.parseHtml(html, semester, periods)
         assertEquals(0, preview.skippedRows)
+        assertFalse("HTML completeness cannot be guaranteed", preview.allowReplace)
         assertEquals(2, preview.courses.size)
         assertEquals(setOf("数学", "英语"), preview.courses.map { it.name }.toSet())
         assertTrue(preview.courses.all { it.startMinute == 510 && it.endMinute == 610 })
