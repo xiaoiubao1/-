@@ -82,14 +82,22 @@ internal fun SchoolImportScreen(viewModel: MainViewModel, semesterId: Long) {
         webView?.loadUrl("about:blank")
         webView?.clearHistory()
         webView?.clearCache(true)
-        WebStorage.getInstance().deleteAllData()
-        CookieManager.getInstance().removeAllCookies {
-            CookieManager.getInstance().flush()
+        webView?.removeAllViews()
+        webView?.destroy()
+        webView = null
+        val finish = {
             viewModel.browserSessionStarted = false
             viewModel.schoolBrowserUrl = ""
             viewModel.showSchoolBrowser = false
             after()
         }
+        try {
+            WebStorage.getInstance().deleteAllData()
+            CookieManager.getInstance().removeAllCookies {
+                CookieManager.getInstance().flush()
+                finish()
+            }
+        } catch (_: Exception) { finish() } // The system WebView provider may be missing or disabled.
     }
     BackHandler { if (webView?.canGoBack() == true) webView?.goBack() else close() }
     Dialog(onDismissRequest = { close() }, properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = false)) {
@@ -108,7 +116,7 @@ internal fun SchoolImportScreen(viewModel: MainViewModel, semesterId: Long) {
                 Text("由你在学校页面登录；只在点击识别时读取课表表格，在本机解析。关闭会清理本次登录信息。", Modifier.padding(horizontal = 12.dp, vertical = 3.dp), style = MaterialTheme.typography.labelSmall)
                 if (loading || reading || closing) LinearProgressIndicator(Modifier.fillMaxWidth())
                 AndroidView(modifier = Modifier.weight(1f).fillMaxWidth(), factory = { context ->
-                    WebView(context).apply {
+                    try { WebView(context).apply {
                         webView = this
                         importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
                         settings.javaScriptEnabled = true
@@ -150,6 +158,11 @@ internal fun SchoolImportScreen(viewModel: MainViewModel, semesterId: Long) {
                             WebStorage.getInstance().deleteAllData()
                             CookieManager.getInstance().removeAllCookies { if (alive.get() && SchoolWebPolicy.allows(initial)) loadUrl(initial) }
                         } else if (SchoolWebPolicy.allows(initial)) loadUrl(initial)
+                    } } catch (_: Exception) {
+                        webView = null
+                        loading = false
+                        status = "系统 WebView 不可用，请更新系统网页组件；也可以返回导入 HTML / CSV 文件。"
+                        android.widget.TextView(context).apply { text = status; setPadding(24, 24, 24, 24) }
                     }
                 })
                 Row(Modifier.fillMaxWidth().padding(10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -159,7 +172,7 @@ internal fun SchoolImportScreen(viewModel: MainViewModel, semesterId: Long) {
                         webView?.evaluateJavascript(SchoolWebPolicy.captureScript) { encoded ->
                             if (!closing) close { viewModel.previewSchoolPage(encoded, semesterId) }
                         }
-                    }, modifier = Modifier.weight(1f), enabled = !loading && !reading && !closing && SchoolWebPolicy.allows(viewModel.schoolBrowserUrl)) { Text("识别课表并预览") }
+                    }, modifier = Modifier.weight(1f), enabled = !loading && !reading && !closing && webView != null && SchoolWebPolicy.allows(viewModel.schoolBrowserUrl)) { Text("识别课表并预览") }
                 }
             }
         }

@@ -902,6 +902,13 @@ private fun v131ColorScheme(theme: ThemePreset, backgroundStyle: BackgroundStyle
     else lightColorScheme(primary = primary, background = Color(0xFFF7F8FC), surface = Color.White)
 }
 
+private fun v131Luminance(color: Int): Double {
+    val r = ((color shr 16) and 0xFF) / 255.0
+    val g = ((color shr 8) and 0xFF) / 255.0
+    val b = (color and 0xFF) / 255.0
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
 private fun v131Minute(value: Int): String = "%02d:%02d".format(value / 60, value % 60)
 private fun v131Weekday(day: Int): String = listOf("一", "二", "三", "四", "五", "六", "日")[day.coerceIn(1, 7) - 1]
 private fun v131CurrentWeekday(): Int = when (Calendar.getInstance().get(Calendar.DAY_OF_WEEK)) {

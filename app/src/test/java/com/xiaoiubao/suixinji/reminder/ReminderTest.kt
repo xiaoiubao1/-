@@ -12,6 +12,9 @@ import com.xiaoiubao.suixinji.MainActivity
 import com.xiaoiubao.suixinji.data.EventDatabase
 import com.xiaoiubao.suixinji.data.EventNote
 import com.xiaoiubao.suixinji.data.Course
+import com.xiaoiubao.suixinji.data.Semester
+import com.xiaoiubao.suixinji.data.Timetable
+import com.xiaoiubao.suixinji.settings.AppSettings
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -78,6 +81,27 @@ class ReminderTest {
             ReminderDelivery.event(app, id)
         }
         assertEquals(0, shadowOf(app.getSystemService(NotificationManager::class.java)).allNotifications.size)
+    }
+
+    @Test fun inactiveSemesterAlarmsAreCancelledAndStaleTermRevisionCannotNotify() {
+        EventDatabase(app).use { db ->
+            val id = db.insertCourse(Course(name = "旧学期", reminderEnabled = true))
+            AppSettings(app).activeSemesterId = 1
+            val course = db.getCourse(id)!!
+            CourseReminderScheduler.schedule(app, course)
+            assertEquals(1, shadowOf(app.getSystemService(AlarmManager::class.java)).scheduledAlarms.size)
+            val second = db.saveSemester(Semester.newTerm().copy(name = "下一学期"), Timetable.defaultPeriods())
+            AppSettings(app).activeSemesterId = second
+            CourseReminderScheduler.schedule(app, course)
+            assertTrue(shadowOf(app.getSystemService(AlarmManager::class.java)).scheduledAlarms.isEmpty())
+            ReminderDelivery.course(app, id)
+            assertTrue(shadowOf(app.getSystemService(NotificationManager::class.java)).allNotifications.isEmpty())
+            AppSettings(app).activeSemesterId = 1
+            val revision = CourseReminderScheduler.revision(course, db.getSemester(1)!!)
+            db.saveSemester(db.getSemester(1)!!.copy(startDate = "2026-03-02"), db.getPeriods(1))
+            ReminderDelivery.course(app, id, revision = revision)
+            assertTrue(shadowOf(app.getSystemService(NotificationManager::class.java)).allNotifications.isEmpty())
+        }
     }
 
     @Test fun weeklyReminderKeepsLocalTimeAcrossDaylightSavingTransition() {
