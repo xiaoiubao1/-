@@ -3,15 +3,20 @@ package com.xiaoiubao.suixinji.reminder
 import android.content.Context
 import androidx.work.WorkManager
 import com.xiaoiubao.suixinji.data.Course
-import java.util.Calendar
+import com.xiaoiubao.suixinji.data.EventDatabase
+import com.xiaoiubao.suixinji.data.Semester
+import com.xiaoiubao.suixinji.data.Timetable
+import com.xiaoiubao.suixinji.settings.AppSettings
 
 object CourseReminderScheduler {
     private fun workName(id: Long) = "course-reminder-$id"
 
     fun schedule(context: Context, course: Course) {
         cancel(context, course.id)
-        if (!course.reminderEnabled || course.id <= 0L) return
-        ReminderAlarms.schedule(context, "course", course.id, nextTriggerMillis(course), revision(course))
+        if (!course.reminderEnabled || course.id <= 0L || course.semesterId != AppSettings(context).activeSemesterId) return
+        val semester = EventDatabase(context).use { it.getSemester(course.semesterId) } ?: return
+        val trigger = nextTriggerMillis(course, semester = semester) ?: return
+        ReminderAlarms.schedule(context, "course", course.id, trigger, revision(course, semester))
     }
 
     fun cancel(context: Context, id: Long) {
@@ -20,32 +25,9 @@ object CourseReminderScheduler {
         WorkManager.getInstance(context).cancelUniqueWork(workName(id))
     }
 
-    internal fun revision(course: Course): String =
-        "${course.dayOfWeek}:${course.startMinute}:${course.endMinute}:${course.reminderMinutesBefore}"
+    internal fun revision(course: Course, semester: Semester): String =
+        "${course.semesterId}:${semester.startDate}:${semester.totalWeeks}:${course.weeks.sorted().joinToString(",")}:${course.dayOfWeek}:${course.startMinute}:${course.endMinute}:${course.reminderMinutesBefore}"
 
-    internal fun nextTriggerMillis(course: Course, nowMillis: Long = System.currentTimeMillis()): Long {
-        val now = Calendar.getInstance().apply { timeInMillis = nowMillis }
-        val target = Calendar.getInstance().apply {
-            timeInMillis = nowMillis
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-            set(Calendar.HOUR_OF_DAY, course.startMinute / 60)
-            set(Calendar.MINUTE, course.startMinute % 60)
-        }
-
-        val androidDay = when (course.dayOfWeek.coerceIn(1, 7)) {
-            1 -> Calendar.MONDAY
-            2 -> Calendar.TUESDAY
-            3 -> Calendar.WEDNESDAY
-            4 -> Calendar.THURSDAY
-            5 -> Calendar.FRIDAY
-            6 -> Calendar.SATURDAY
-            else -> Calendar.SUNDAY
-        }
-        val daysAhead = (androidDay - now.get(Calendar.DAY_OF_WEEK) + 7) % 7
-        target.add(Calendar.DAY_OF_YEAR, daysAhead)
-        target.add(Calendar.MINUTE, -course.reminderMinutesBefore.coerceIn(0, 180))
-        if (target.timeInMillis <= nowMillis) target.add(Calendar.DAY_OF_YEAR, 7)
-        return target.timeInMillis
-    }
+    internal fun nextTriggerMillis(course: Course, nowMillis: Long = System.currentTimeMillis(), semester: Semester = Semester.legacy()): Long? =
+        Timetable.nextReminder(course, semester, nowMillis)
 }

@@ -4,14 +4,16 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
-import java.util.Calendar
+import java.time.LocalDateTime
+import com.xiaoiubao.suixinji.settings.AppSettings
 
-class EventDatabase(context: Context) :
+class EventDatabase(private val context: Context) :
     SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION), java.io.Closeable {
 
     override fun onCreate(db: SQLiteDatabase) {
         createEventsTable(db)
         createCoursesTable(db)
+        createSemesterTables(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -22,6 +24,13 @@ class EventDatabase(context: Context) :
         if (oldVersion >= 2 && oldVersion < 3) {
             db.execSQL("ALTER TABLE courses ADD COLUMN reminder_enabled INTEGER NOT NULL DEFAULT 0")
             db.execSQL("ALTER TABLE courses ADD COLUMN reminder_minutes_before INTEGER NOT NULL DEFAULT 10")
+        }
+        if (oldVersion < 4) {
+            if (oldVersion >= 2) {
+                db.execSQL("ALTER TABLE courses ADD COLUMN semester_id INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE courses ADD COLUMN weeks TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20'")
+            }
+            createSemesterTables(db)
         }
     }
 
@@ -58,7 +67,9 @@ class EventDatabase(context: Context) :
                 end_minute INTEGER NOT NULL,
                 note TEXT NOT NULL DEFAULT '',
                 reminder_enabled INTEGER NOT NULL DEFAULT 0,
-                reminder_minutes_before INTEGER NOT NULL DEFAULT 10
+                reminder_minutes_before INTEGER NOT NULL DEFAULT 10,
+                semester_id INTEGER NOT NULL DEFAULT 1,
+                weeks TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20'
             )
             """.trimIndent()
         )
@@ -165,34 +176,20 @@ class EventDatabase(context: Context) :
         "1"
     ).use { cursor -> if (cursor.moveToFirst()) cursor.toCourse() else null }
 
-    fun getNextCourseToday(): Course? {
-        val calendar = Calendar.getInstance()
-        val day = when (calendar.get(Calendar.DAY_OF_WEEK)) {
-            Calendar.MONDAY -> 1
-            Calendar.TUESDAY -> 2
-            Calendar.WEDNESDAY -> 3
-            Calendar.THURSDAY -> 4
-            Calendar.FRIDAY -> 5
-            Calendar.SATURDAY -> 6
-            else -> 7
+    fun getNextCourseToday(now: LocalDateTime = LocalDateTime.now()): Course? {
+        val semester = getSemester(AppSettings(context).activeSemesterId) ?: getSemesters().firstOrNull() ?: return null
+        return getCourses().firstOrNull {
+            Timetable.occursOn(it, semester, now.toLocalDate()) && it.endMinute > now.hour * 60 + now.minute
         }
-        val minute = calendar.get(Calendar.HOUR_OF_DAY) * 60 + calendar.get(Calendar.MINUTE)
-        return readableDatabase.query(
-            "courses",
-            null,
-            "day_of_week = ? AND end_minute >= ?",
-            arrayOf(day.toString(), minute.toString()),
-            null,
-            null,
-            "start_minute ASC",
-            "1"
-        ).use { cursor -> if (cursor.moveToFirst()) cursor.toCourse() else null }
     }
 
-    fun insertCourse(course: Course): Long =
-        writableDatabase.insertOrThrow("courses", null, course.toContentValues())
+    fun insertCourse(course: Course): Long {
+        course.validate(getSemester(course.semesterId) ?: error("课程所属学期不存在"))
+        return writableDatabase.insertOrThrow("courses", null, course.toContentValues())
+    }
 
     fun updateCourse(course: Course) {
+        course.validate(getSemester(course.semesterId) ?: error("课程所属学期不存在"))
         writableDatabase.update(
             "courses",
             course.toContentValues(),
@@ -205,17 +202,27 @@ class EventDatabase(context: Context) :
         writableDatabase.delete("courses", "id = ?", arrayOf(id.toString()))
     }
 
-    fun replaceAll(events: List<EventNote>, courses: List<Course>, beforeCommit: () -> Unit = {}) {
+    fun replaceAll(events: List<EventNote>, courses: List<Course>, semesters: List<Semester>? = null, periods: List<CoursePeriod>? = null, beforeCommit: () -> Unit = {}) {
         val db = writableDatabase
         db.beginTransaction()
         try {
             db.delete("events", null, null)
             db.delete("courses", null, null)
+            if (semesters != null && periods != null) {
+                require(semesters.isNotEmpty()) { "备份缺少学期" }
+                db.delete("periods", null, null)
+                db.delete("semesters", null, null)
+                semesters.forEach { term ->
+                    term.validate()
+                    db.insertOrThrow("semesters", null, term.toContentValues().apply { put("id", term.id) })
+                    replacePeriods(term.id, periods.filter { it.semesterId == term.id })
+                }
+            }
             events.forEach { event ->
                 db.insertOrThrow("events", null, event.copy(id = 0).toContentValues(includeCreatedAt = true))
             }
             courses.forEach { course ->
-                db.insertOrThrow("courses", null, course.copy(id = 0).toContentValues())
+                insertCourse(course.copy(id = 0))
             }
             beforeCommit()
             db.setTransactionSuccessful()
@@ -246,7 +253,9 @@ class EventDatabase(context: Context) :
         endMinute = getInt(getColumnIndexOrThrow("end_minute")),
         note = getString(getColumnIndexOrThrow("note")),
         reminderEnabled = getInt(getColumnIndexOrThrow("reminder_enabled")) == 1,
-        reminderMinutesBefore = getInt(getColumnIndexOrThrow("reminder_minutes_before"))
+        reminderMinutesBefore = getInt(getColumnIndexOrThrow("reminder_minutes_before")),
+        semesterId = getLong(getColumnIndexOrThrow("semester_id")),
+        weeks = getString(getColumnIndexOrThrow("weeks")).split(',').map(String::toInt)
     )
 
     private fun EventNote.toContentValues(includeCreatedAt: Boolean) = ContentValues().apply {
@@ -261,6 +270,8 @@ class EventDatabase(context: Context) :
     }
 
     private fun Course.toContentValues() = ContentValues().apply {
+        put("semester_id", semesterId)
+        put("weeks", weeks.sorted().joinToString(","))
         put("name", name.trim())
         put("teacher", teacher.trim())
         put("location", location.trim())
@@ -272,8 +283,70 @@ class EventDatabase(context: Context) :
         put("reminder_minutes_before", reminderMinutesBefore.coerceIn(0, 180))
     }
 
+    private fun createSemesterTables(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS semesters (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, start_date TEXT NOT NULL, total_weeks INTEGER NOT NULL)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS periods (semester_id INTEGER NOT NULL, number INTEGER NOT NULL, start_minute INTEGER NOT NULL, end_minute INTEGER NOT NULL, PRIMARY KEY(semester_id, number))")
+        db.insertOrThrow("semesters", null, Semester.legacy().toContentValues().apply { put("id", 1) })
+        Timetable.defaultPeriods().forEach { db.insertOrThrow("periods", null, it.toContentValues()) }
+    }
+
+    fun getSemesters(): List<Semester> = readableDatabase.query("semesters", null, null, null, null, null, "id DESC").use { cursor ->
+        buildList {
+            while (cursor.moveToNext()) add(Semester(cursor.getLong(0), cursor.getString(1), cursor.getString(2), cursor.getInt(3)))
+        }
+    }
+    fun getSemester(id: Long): Semester? = getSemesters().firstOrNull { it.id == id }
+    fun getPeriods(semesterId: Long? = null): List<CoursePeriod> = readableDatabase.query(
+        "periods", null, if (semesterId == null) null else "semester_id = ?", semesterId?.let { arrayOf(it.toString()) }, null, null, "semester_id, number"
+    ).use { cursor -> buildList {
+        while (cursor.moveToNext()) add(CoursePeriod(cursor.getInt(1), cursor.getInt(2), cursor.getInt(3), cursor.getLong(0)))
+    } }
+
+    fun saveSemester(semester: Semester, periods: List<CoursePeriod>): Long = transaction {
+        semester.validate(); Timetable.validatePeriods(periods)
+        if (semester.id > 0) {
+            require(getSemester(semester.id) != null) { "学期不存在" }
+            require(getCourses().filter { it.semesterId == semester.id }.all { course -> course.weeks.all { it <= semester.totalWeeks } }) { "现有课程包含较后的周次，请先修改课程再缩短学期" }
+        }
+        val id = if (semester.id == 0L) writableDatabase.insertOrThrow("semesters", null, semester.toContentValues())
+            else semester.id.also { writableDatabase.update("semesters", semester.toContentValues(), "id = ?", arrayOf(it.toString())) }
+        replacePeriods(id, periods.map { it.copy(semesterId = id) })
+        id
+    }
+
+    private fun replacePeriods(id: Long, periods: List<CoursePeriod>) {
+        Timetable.validatePeriods(periods)
+        writableDatabase.delete("periods", "semester_id = ?", arrayOf(id.toString()))
+        periods.forEach { writableDatabase.insertOrThrow("periods", null, it.copy(semesterId = id).toContentValues()) }
+    }
+
+    fun deleteSemester(id: Long) = transaction {
+        require(getSemesters().size > 1) { "至少保留一个学期" }
+        writableDatabase.delete("courses", "semester_id = ?", arrayOf(id.toString()))
+        writableDatabase.delete("periods", "semester_id = ?", arrayOf(id.toString()))
+        writableDatabase.delete("semesters", "id = ?", arrayOf(id.toString()))
+    }
+
+    fun importCourses(semesterId: Long, courses: List<Course>, replace: Boolean): Int = transaction {
+        val semester = getSemester(semesterId) ?: error("目标学期已不存在，请重新导入")
+        require(courses.isNotEmpty() && courses.size <= 2000) { "没有可导入的课程或超过 2000 条限制" }
+        courses.forEach { it.validate(semester) }
+        if (replace) writableDatabase.delete("courses", "semester_id = ?", arrayOf(semesterId.toString()))
+        val existing = getCourses().filter { it.semesterId == semesterId }.map { it.importKey() }.toMutableSet()
+        var inserted = 0
+        courses.forEach { if (existing.add(it.importKey())) { insertCourse(it.copy(id = 0)); inserted++ } }
+        inserted
+    }
+
+    private fun Semester.toContentValues() = ContentValues().apply {
+        put("name", name.trim()); put("start_date", startDate); put("total_weeks", totalWeeks)
+    }
+    private fun CoursePeriod.toContentValues() = ContentValues().apply {
+        put("semester_id", semesterId); put("number", number); put("start_minute", startMinute); put("end_minute", endMinute)
+    }
+
     companion object {
         private const val DATABASE_NAME = "suixinji.db"
-        private const val DATABASE_VERSION = 3
+        private const val DATABASE_VERSION = 4
     }
 }

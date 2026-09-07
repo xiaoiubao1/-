@@ -52,7 +52,9 @@ class BackupService(private val context: Context) {
     }
 
     fun createBackup(db: EventDatabase, settings: AppSettings, uri: Uri): String {
-        val (events, courses) = DataAccess.lock.withLock { db.getAll() to db.getCourses() }
+        val snapshot = DataAccess.lock.withLock { BackupSnapshot(db.getAll(), db.getCourses(), db.getSemesters(), db.getPeriods(), settings.activeSemesterId) }
+        val events = snapshot.events
+        val courses = snapshot.courses
         val wallpaper = settings.wallpaper
         val widgetBackground = settings.widgetBackgroundUri
         val staging = File(context.cacheDir, "backup-${UUID.randomUUID()}").apply { check(mkdirs()) }
@@ -78,7 +80,7 @@ class BackupService(private val context: Context) {
 
         val root = JSONObject().apply {
             put("format", "suixinji-backup")
-            put("version", 3)
+            put("version", 4)
             put("createdAt", System.currentTimeMillis())
             put("settings", JSONObject().apply {
                 put("theme", settings.theme.name)
@@ -116,6 +118,8 @@ class BackupService(private val context: Context) {
         val courseArray = JSONArray()
         courses.forEach { course ->
             courseArray.put(JSONObject().apply {
+                put("semesterId", course.semesterId)
+                put("weeks", JSONArray(course.weeks))
                 put("name", course.name)
                 put("teacher", course.teacher)
                 put("location", course.location)
@@ -128,6 +132,14 @@ class BackupService(private val context: Context) {
             })
         }
         root.put("courses", courseArray)
+        root.put("activeSemesterId", snapshot.activeSemesterId)
+        root.put("semesters", JSONArray().apply { snapshot.semesters.forEach { term -> put(JSONObject().apply {
+            put("id", term.id); put("name", term.name); put("startDate", term.startDate); put("totalWeeks", term.totalWeeks)
+        }) } })
+        root.put("periods", JSONArray().apply { snapshot.periods.forEach { period -> put(JSONObject().apply {
+            put("semesterId", period.semesterId); put("number", period.number)
+            put("startMinute", period.startMinute); put("endMinute", period.endMinute)
+        }) } })
 
         // Never report success for an archive our own restore would reject.
         val manifest = root.toString(2).toByteArray(Charsets.UTF_8)
@@ -196,10 +208,29 @@ class BackupService(private val context: Context) {
             require(rootFile.isFile && rootFile.length() <= MAX_MANIFEST_BYTES) { "备份清单不存在或过大" }
             val root = JSONObject(rootFile.readText(Charsets.UTF_8))
             require(root.text("format") == "suixinji-backup") { "备份格式不受支持" }
-            require(root.number("version", -1) in 1L..3L) { "备份版本不受支持" }
+            val version = root.number("version", -1)
+            require(version in 1L..4L) { "备份版本不受支持" }
             // Missing / mistyped arrays must not turn into an apparently successful empty restore.
             val eventsJson = root.getJSONArray("events")
             val coursesJson = root.getJSONArray("courses")
+            val semesters = if (version < 4) listOf(Semester.legacy()) else root.getJSONArray("semesters").let { array ->
+                require(array.length() in 1..100) { "学期数量无效" }
+                (0 until array.length()).map { index -> array.getJSONObject(index).let { item ->
+                    Semester(item.number("id", -1), item.text("name"), item.text("startDate"), item.integer("totalWeeks", -1))
+                        .also { it.validate(); require(it.id in 1..1_000_000_000L) { "学期 ID 无效" } }
+                } }
+            }
+            require(semesters.map { it.id }.distinct().size == semesters.size) { "重复学期" }
+            val periods = if (version < 4) Timetable.defaultPeriods() else root.getJSONArray("periods").let { array ->
+                require(array.length() <= 2400) { "节次数量过多" }
+                (0 until array.length()).map { index -> array.getJSONObject(index).let { item ->
+                    CoursePeriod(item.integer("number", -1), item.integer("startMinute", -1), item.integer("endMinute", -1), item.number("semesterId", -1))
+                } }
+            }
+            require(periods.all { p -> semesters.any { it.id == p.semesterId } }) { "节次所属学期无效" }
+            semesters.forEach { term -> Timetable.validatePeriods(periods.filter { it.semesterId == term.id }.sortedBy { it.number }) }
+            val activeSemesterId = if (version < 4) 1L else root.number("activeSemesterId", -1)
+            require(semesters.any { it.id == activeSemesterId }) { "当前学期无效" }
             val json = if (root.has("settings")) root.getJSONObject("settings") else null
             check(newMedia.mkdirs()) { "无法创建恢复目录" }
             fun media(entry: String, prefix: String): String {
@@ -234,9 +265,19 @@ class BackupService(private val context: Context) {
                 require(name.isNotBlank() && day in 1..7 && start in 0..1439 && end in 1..1439 && end > start && before in 0..180) { "课程数据无效" }
                 Course(name = name, teacher = item.text("teacher"), location = item.text("location"),
                     dayOfWeek = day, startMinute = start, endMinute = end, note = item.text("note"),
-                    reminderEnabled = item.flag("reminderEnabled", false), reminderMinutesBefore = before)
+                    reminderEnabled = item.flag("reminderEnabled", false), reminderMinutesBefore = before,
+                    semesterId = if (version < 4) 1L else item.number("semesterId", -1),
+                    weeks = if (version < 4) (1..20).toList() else item.getJSONArray("weeks").let { array ->
+                        require(array.length() in 1..60) { "课程周次无效" }
+                        (0 until array.length()).map { i ->
+                            val value = array.get(i)
+                            require(value is Number && value.toDouble() in 1.0..60.0 && value.toDouble() == value.toInt().toDouble()) { "课程周次无效" }
+                            value.toInt()
+                        }
+                    }).also { course -> course.validate(semesters.firstOrNull { it.id == course.semesterId } ?: error("课程所属学期无效")) }
             }
             val nextSettings = oldSettings.toMutableMap()
+            nextSettings["active_semester_id"] = activeSemesterId
             json?.let {
                 val wallpaper = if (it.text("wallpaper") == "custom") media(it.text("wallpaperEntry"), "wallpaper") else ""
                 val widget = if (it.text("widgetBackground") == "custom") media(it.text("widgetBackgroundEntry"), "widget") else ""
@@ -257,11 +298,9 @@ class BackupService(private val context: Context) {
             // File copying/decompression must not hold the reminder delivery lock.
             DataAccess.lock.withLock {
                 try {
-                    db.replaceAll(events, courses) {
-                        if (json != null) {
-                            settingsTouched = true
-                            settings.replace(nextSettings)
-                        }
+                    db.replaceAll(events, courses, semesters, periods.sortedWith(compareBy({ it.semesterId }, { it.number }))) {
+                        settingsTouched = true
+                        settings.replace(nextSettings)
                     }
                     committed = true
                 } catch (e: Exception) {
@@ -286,6 +325,8 @@ class BackupService(private val context: Context) {
             tempDir.deleteRecursively()
         }
     }
+
+    private data class BackupSnapshot(val events: List<EventNote>, val courses: List<Course>, val semesters: List<Semester>, val periods: List<CoursePeriod>, val activeSemesterId: Long)
 
     private fun JSONObject.text(key: String, default: String = ""): String {
         if (!has(key)) return default

@@ -46,7 +46,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.xiaoiubao.suixinji.data.Course
+import com.xiaoiubao.suixinji.data.*
 import com.xiaoiubao.suixinji.data.EventNote
 import com.xiaoiubao.suixinji.reminder.NotificationTester
 import com.xiaoiubao.suixinji.settings.AppSettings
@@ -59,22 +59,8 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
-import kotlin.math.abs
 
 private enum class V131Section { TIMETABLE, NOTES, SETTINGS }
-private data class V131Period(val number: Int, val start: Int, val end: Int)
-
-private val v131Periods = listOf(
-    V131Period(1, 8 * 60 + 30, 9 * 60 + 15),
-    V131Period(2, 9 * 60 + 25, 10 * 60 + 10),
-    V131Period(3, 10 * 60 + 30, 11 * 60 + 15),
-    V131Period(4, 11 * 60 + 25, 12 * 60 + 10),
-    V131Period(5, 14 * 60 + 30, 15 * 60 + 15),
-    V131Period(6, 15 * 60 + 25, 16 * 60 + 10),
-    V131Period(7, 17 * 60 + 30, 18 * 60 + 15),
-    V131Period(8, 18 * 60 + 25, 19 * 60 + 10)
-)
-
 private val LocalV131Glass = staticCompositionLocalOf { 0.60f }
 private val LocalV131HasWallpaper = staticCompositionLocalOf { false }
 
@@ -89,6 +75,8 @@ fun SuixinjiRootV131(
     val context = LocalContext.current
     val events by viewModel.events.collectAsState()
     val courses by viewModel.courses.collectAsState()
+    val semesters by viewModel.semesters.collectAsState()
+    val periods by viewModel.periods.collectAsState()
     val operationMessage by viewModel.importMessage.collectAsState()
     val busy by viewModel.busy.collectAsState()
 
@@ -201,12 +189,7 @@ fun SuixinjiRootV131(
                     }
                 ) { padding ->
                     when (section) {
-                        V131Section.TIMETABLE -> V131Timetable(
-                            modifier = Modifier.padding(padding),
-                            courses = courses,
-                            onEdit = { viewModel.editingCourse = it },
-                            onAdd = { viewModel.editingCourse = it }
-                        )
+                        V131Section.TIMETABLE -> TimetableScreen(viewModel, Modifier.padding(padding))
                         V131Section.NOTES -> V131Notes(
                             modifier = Modifier.padding(padding),
                             events = events,
@@ -289,8 +272,12 @@ fun SuixinjiRootV131(
         }
     }
     viewModel.editingCourse?.let { course ->
-        V131CourseEditor(
+        val semester = semesters.firstOrNull { it.id == course.semesterId }
+        if (semester != null) V131CourseEditor(
             course = course,
+            semester = semester,
+            periods = periods.filter { it.semesterId == semester.id },
+            otherCourses = courses,
             onDismiss = { viewModel.editingCourse = null },
             onDelete = { viewModel.deleteCourse(course) },
             onChange = { viewModel.editingCourse = it }
@@ -452,122 +439,6 @@ private fun V131GlassCard(modifier: Modifier = Modifier, content: @Composable Co
     ) {
         Column(Modifier.fillMaxWidth().padding(11.dp), content = content)
     }
-}
-
-@Composable
-private fun V131Timetable(
-    modifier: Modifier,
-    courses: List<Course>,
-    onEdit: (Course) -> Unit,
-    onAdd: (Course) -> Unit
-) {
-    var choices by remember { mutableStateOf<List<Course>>(emptyList()) }
-    val currentDay = v131CurrentWeekday()
-    val dates = v131CurrentWeekDates()
-    val now = Calendar.getInstance()
-    val locale = LocalConfiguration.current.locales[0]
-    val dateText = SimpleDateFormat("yyyy/M/d", locale).format(Date())
-
-    Column(modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 7.dp, vertical = 5.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(dateText, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                Text("第 ${now.get(Calendar.WEEK_OF_YEAR)} 周", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            FilledTonalButton(
-                onClick = { onAdd(Course(dayOfWeek = currentDay)) },
-                contentPadding = PaddingValues(horizontal = 11.dp, vertical = 5.dp)
-            ) { Icon(Icons.Default.Add, null, Modifier.size(17.dp)); Spacer(Modifier.width(3.dp)); Text("添加") }
-        }
-        Spacer(Modifier.height(5.dp))
-        V131GlassCard(Modifier.weight(1f).fillMaxWidth()) {
-            BoxWithConstraints(Modifier.fillMaxSize()) {
-                val headerHeight = 34.dp
-                val rowHeight = ((maxHeight - headerHeight - 3.dp) / 8f).coerceIn(34.dp, 58.dp)
-                Column(Modifier.fillMaxSize()) {
-                    Row(Modifier.fillMaxWidth().height(headerHeight), verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.width(41.dp), contentAlignment = Alignment.Center) { Text("节次", fontSize = 8.sp) }
-                        (1..7).forEach { day ->
-                            val selected = day == currentDay
-                            Box(
-                                Modifier.weight(1f).fillMaxHeight().padding(horizontal = 0.5.dp)
-                                    .clip(RoundedCornerShape(7.dp))
-                                    .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.11f) else Color.Transparent),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text(v131Weekday(day), fontSize = 9.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
-                                    Text(dates[day - 1], fontSize = 7.sp, color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
-                        }
-                    }
-                    v131Periods.forEachIndexed { index, period ->
-                        if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
-                        Row(Modifier.fillMaxWidth().height(rowHeight)) {
-                            Column(
-                                Modifier.width(41.dp).fillMaxHeight(),
-                                verticalArrangement = Arrangement.Center,
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Text(period.number.toString(), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                                Text(v131Minute(period.start), fontSize = 6.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            (1..7).forEach { day ->
-                                val matches = courses.filter { item ->
-                                    item.dayOfWeek == day && (if (v131Periods.any { item.startMinute < it.end && item.endMinute > it.start })
-                                        item.startMinute < period.end && item.endMinute > period.start
-                                    else v131NearestPeriod(item.startMinute) == index)
-                                }
-                                val course = matches.firstOrNull()
-                                Box(
-                                    Modifier.weight(1f).fillMaxHeight().padding(0.7.dp)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(if (day == currentDay) MaterialTheme.colorScheme.primary.copy(alpha = 0.025f) else Color.Transparent)
-                                        .clickable {
-                                            if (matches.size > 1) choices = matches
-                                            else if (course != null) onEdit(course)
-                                            else onAdd(Course(dayOfWeek = day, startMinute = period.start, endMinute = period.end))
-                                        },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    if (course != null) {
-                                        Surface(
-                                            Modifier.fillMaxSize(),
-                                            shape = RoundedCornerShape(6.dp),
-                                            color = v131CourseColor(course.name).copy(alpha = 0.72f)
-                                        ) {
-                                            Column(
-                                                Modifier.fillMaxSize().padding(horizontal = 1.5.dp, vertical = 1.dp),
-                                                verticalArrangement = Arrangement.Center,
-                                                horizontalAlignment = Alignment.CenterHorizontally
-                                            ) {
-                                                Text(if (matches.size > 1) "${course.name} +${matches.size - 1}" else course.name, fontSize = 7.5.sp, lineHeight = 8.5.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                                if (course.location.isNotBlank() && rowHeight >= 43.dp) {
-                                                    Text(course.location, fontSize = 6.sp, lineHeight = 6.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    if (choices.isNotEmpty()) {
-        AlertDialog(onDismissRequest = { choices = emptyList() }, title = { Text("选择课程") },
-            text = { Column(Modifier.verticalScroll(rememberScrollState())) {
-                choices.forEach { item ->
-                    TextButton(onClick = { choices = emptyList(); onEdit(item) }) {
-                        Text("${v131Minute(item.startMinute)}–${v131Minute(item.endMinute)} ${item.name}")
-                    }
-                }
-            } }, confirmButton = { TextButton(onClick = { choices = emptyList() }) { Text("关闭") } })
-    }
-
 }
 
 @Composable
@@ -823,7 +694,7 @@ private fun V131EventEditor(note: EventNote, onDismiss: () -> Unit, onChange: (E
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun V131CourseEditor(course: Course, onDismiss: () -> Unit, onDelete: () -> Unit, onChange: (Course) -> Unit, onSave: (Course) -> Unit) {
+private fun V131CourseEditor(course: Course, semester: Semester, periods: List<CoursePeriod>, otherCourses: List<Course>, onDismiss: () -> Unit, onDelete: () -> Unit, onChange: (Course) -> Unit, onSave: (Course) -> Unit) {
     val name = course.name
     val teacher = course.teacher
     val location = course.location
@@ -834,6 +705,11 @@ private fun V131CourseEditor(course: Course, onDismiss: () -> Unit, onDelete: ()
     val reminder = course.reminderEnabled
     val before = course.reminderMinutesBefore
     var editingStart by rememberSaveable { mutableStateOf<Boolean?>(null) }
+    var weeksInput by rememberSaveable(course.id) { mutableStateOf(Timetable.weeksText(course.weeks)) }
+    var deleteConfirm by rememberSaveable(course.id) { mutableStateOf(false) }
+    val parsedWeeks = runCatching { Timetable.parseWeeks(weeksInput, semester.totalWeeks) }
+    val conflicts = otherCourses.filter { it.id != course.id && Timetable.conflicts(course, it, semester.startDate.isBlank()) }
+    fun selectWeeks(weeks: List<Int>) { weeksInput = Timetable.weeksText(weeks); onChange(course.copy(weeks = weeks)) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -848,33 +724,56 @@ private fun V131CourseEditor(course: Course, onDismiss: () -> Unit, onDelete: ()
                 }
                 Text("快捷课节", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    v131Periods.forEach { p ->
-                        AssistChip(onClick = { onChange(course.copy(startMinute = p.start, endMinute = p.end)) }, label = { Text("${p.number}节 ${v131Minute(p.start)}") })
+                    periods.forEach { p ->
+                        AssistChip(onClick = { onChange(course.copy(startMinute = p.startMinute, endMinute = p.endMinute)) }, label = { Text("${p.number}节 ${v131Minute(p.startMinute)}") })
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     FilledTonalButton(onClick = { editingStart = true }, Modifier.weight(1f)) { Text("开始 ${v131Minute(start)}") }
                     FilledTonalButton(onClick = { editingStart = false }, Modifier.weight(1f)) { Text("结束 ${v131Minute(end)}") }
                 }
-                OutlinedTextField(note, { onChange(course.copy(note = it)) }, Modifier.fillMaxWidth(), label = { Text("备注") })
+                Text("${semester.name} · 上课周次", fontWeight = FontWeight.SemiBold)
+                if (semester.startDate.isBlank()) Text("当前学期未设置日期，仍每周重复；设置学期起始日后以下周次才会生效。", style = MaterialTheme.typography.bodySmall)
+                Row {
+                    TextButton(onClick = { selectWeeks((1..semester.totalWeeks).toList()) }) { Text("全周") }
+                    TextButton(onClick = { selectWeeks((1..semester.totalWeeks).filter { it % 2 == 1 }) }) { Text("单周") }
+                    TextButton(onClick = { selectWeeks((1..semester.totalWeeks).filter { it % 2 == 0 }) }, enabled = semester.totalWeeks > 1) { Text("双周") }
+                }
+                OutlinedTextField(weeksInput, { value ->
+                    weeksInput = value.take(500)
+                    runCatching { Timetable.parseWeeks(value, semester.totalWeeks) }.getOrNull()?.let { onChange(course.copy(weeks = it)) }
+                }, Modifier.fillMaxWidth(), label = { Text("例如 1-16 或 1,3,8-12") }, isError = parsedWeeks.isFailure)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    (1..semester.totalWeeks).forEach { week ->
+                        FilterChip(week in course.weeks, { selectWeeks(if (week in course.weeks) course.weeks - week else (course.weeks + week).sorted()) }, { Text("$week") })
+                    }
+                }
+                if (parsedWeeks.isFailure) Text(parsedWeeks.exceptionOrNull()?.message.orEmpty(), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                if (conflicts.isNotEmpty()) Text("时间冲突：${conflicts.take(4).joinToString("、") { it.name }}。仍可保存，请核对周次。", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(note, { onChange(course.copy(note = it)) }, Modifier.fillMaxWidth(), label = { Text("备注 / 导入原文") })
                 Row(verticalAlignment = Alignment.CenterVertically) { Text("课程开始提醒", Modifier.weight(1f)); Switch(reminder, { onChange(course.copy(reminderEnabled = it)) }) }
                 if (reminder) {
                     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         listOf(0, 5, 10, 15, 30, 60).forEach { m -> FilterChip(m == before, { onChange(course.copy(reminderMinutesBefore = m)) }, { Text(if (m == 0) "上课时" else "$m 分") }) }
                     }
                 }
-                if (course.id != 0L) OutlinedButton(onClick = onDelete, modifier = Modifier.fillMaxWidth()) { Text("删除课程") }
+                Text("提醒只对当前选中的学期生效。", style = MaterialTheme.typography.bodySmall)
+                if (course.id != 0L) {
+                    OutlinedButton(onClick = { onChange(course.copy(id = 0)) }, modifier = Modifier.fillMaxWidth()) { Text("复制为新课程") }
+                    OutlinedButton(onClick = { deleteConfirm = true }, modifier = Modifier.fillMaxWidth()) { Text("删除课程") }
+                }
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
         confirmButton = {
             Button(
                 onClick = { if (name.isNotBlank()) onSave(course.copy(name = name.trim(), teacher = teacher.trim(), location = location.trim(), dayOfWeek = day, startMinute = start, endMinute = end, note = note.trim(), reminderEnabled = reminder, reminderMinutesBefore = before)) },
-                enabled = name.isNotBlank() && end > start
+                enabled = name.isNotBlank() && end > start && parsedWeeks.isSuccess
             ) { Text("保存") }
         }
     )
 
+    if (deleteConfirm) AlertDialog(onDismissRequest = { deleteConfirm = false }, title = { Text("删除课程？") }, text = { Text("将删除此课程的所有周次安排和提醒。") }, dismissButton = { TextButton(onClick = { deleteConfirm = false }) { Text("取消") } }, confirmButton = { Button(onClick = { deleteConfirm = false; onDelete() }) { Text("删除") } })
     editingStart?.let { isStart ->
         V131MinuteSheet(
             title = if (isStart) "选择开始时间" else "选择结束时间",
@@ -1003,19 +902,6 @@ private fun v131ColorScheme(theme: ThemePreset, backgroundStyle: BackgroundStyle
     else lightColorScheme(primary = primary, background = Color(0xFFF7F8FC), surface = Color.White)
 }
 
-private fun v131CourseColor(seed: String): Color {
-    val colors = listOf(Color(0xFFF7B6C8), Color(0xFFB8D8F7), Color(0xFFC5E6C8), Color(0xFFE1C8F2), Color(0xFFF5D5A8), Color(0xFFBDE3E5))
-    return colors[DateTimes.colorIndex(seed, colors.size)]
-}
-
-private fun v131Luminance(color: Int): Double {
-    val r = ((color shr 16) and 0xFF) / 255.0
-    val g = ((color shr 8) and 0xFF) / 255.0
-    val b = (color and 0xFF) / 255.0
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b
-}
-
-private fun v131NearestPeriod(minute: Int): Int = v131Periods.indices.minByOrNull { abs(v131Periods[it].start - minute) } ?: 0
 private fun v131Minute(value: Int): String = "%02d:%02d".format(value / 60, value % 60)
 private fun v131Weekday(day: Int): String = listOf("一", "二", "三", "四", "五", "六", "日")[day.coerceIn(1, 7) - 1]
 private fun v131CurrentWeekday(): Int = when (Calendar.getInstance().get(Calendar.DAY_OF_WEEK)) {

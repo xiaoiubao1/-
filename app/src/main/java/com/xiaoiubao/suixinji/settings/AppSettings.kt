@@ -24,6 +24,10 @@ enum class WidgetTextMode(val title: String) {
 class AppSettings(context: Context) {
     private val prefs = context.getSharedPreferences("suixinji_settings", Context.MODE_PRIVATE)
 
+    var activeSemesterId: Long
+        get() = prefs.getLong("active_semester_id", 1L)
+        set(value) { check(prefs.edit().putLong("active_semester_id", value).commit()) { "无法保存当前学期" } }
+
     var theme: ThemePreset
         get() = runCatching {
             ThemePreset.valueOf(prefs.getString(KEY_THEME, null) ?: ThemePreset.CREAM.name)

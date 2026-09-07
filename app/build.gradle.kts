@@ -14,8 +14,8 @@ android {
         applicationId = "com.xiaoiubao.suixinji"
         minSdk = 26
         targetSdk = 36
-        versionCode = 7
-        versionName = "1.3.3"
+        versionCode = 8
+        versionName = "1.4.0"
     }
 
     val releaseStorePath = System.getenv("ANDROID_KEYSTORE_PATH")
@@ -48,6 +48,7 @@ android {
     testOptions { unitTests.isIncludeAndroidResources = true }
 
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -58,6 +59,8 @@ kotlin {
 }
 
 dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.0.4")
+    implementation("org.jsoup:jsoup:1.23.2")
     val composeBom = platform("androidx.compose:compose-bom:2026.06.00")
     implementation(composeBom)
 

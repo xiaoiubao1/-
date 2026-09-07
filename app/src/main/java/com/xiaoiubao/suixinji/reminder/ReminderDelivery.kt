@@ -10,6 +10,10 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.xiaoiubao.suixinji.MainActivity
 import com.xiaoiubao.suixinji.data.EventDatabase
+import com.xiaoiubao.suixinji.data.Timetable
+import com.xiaoiubao.suixinji.settings.AppSettings
+import java.time.Instant
+import java.time.ZoneId
 import kotlin.math.ceil
 
 object ReminderDelivery {
@@ -34,12 +38,18 @@ object ReminderDelivery {
     fun course(context: Context, id: Long, trigger: Long = 0L, revision: String = "") {
         EventDatabase(context).use { db ->
             val course = db.getCourse(id) ?: return
-            if (!course.reminderEnabled || (revision.isNotEmpty() && revision != CourseReminderScheduler.revision(course))) return
+            val semester = db.getSemester(course.semesterId) ?: return
+            if (!course.reminderEnabled || course.semesterId != AppSettings(context).activeSemesterId ||
+                (revision.isNotEmpty() && revision != CourseReminderScheduler.revision(course, semester))) return
             val now = System.currentTimeMillis()
-            val startAt = if (trigger > 0) trigger + course.reminderMinutesBefore * 60000L else now
-            val endAt = startAt + (course.endMinute - course.startMinute) * 60000L
+            val zone = ZoneId.systemDefault()
+            val date = Instant.ofEpochMilli(if (trigger > 0) trigger + course.reminderMinutesBefore * 60000L else now).atZone(zone).toLocalDate()
+            if (!Timetable.occursOn(course, semester, date)) return
+            val startAt = date.atTime(course.startMinute / 60, course.startMinute % 60).atZone(zone).toInstant().toEpochMilli()
+            val endAt = date.atTime(course.endMinute / 60, course.endMinute % 60).atZone(zone).toInstant().toEpochMilli()
+            if (trigger > 0 && startAt - course.reminderMinutesBefore * 60000L != trigger) return
             try {
-                if (now < endAt) {
+                if (now >= startAt - course.reminderMinutesBefore * 60000L && now < endAt) {
                     val left = ceil((startAt - now) / 60000.0).toLong()
                     val time = "%02d:%02d".format(course.startMinute / 60, course.startMinute % 60)
                     val text = (if (left > 0) "$left 分钟后开始 · $time" else "课程已开始 · $time") +
