@@ -2,7 +2,7 @@ v1.4.0 新增多学期、单双周、自定义作息、今日课程、课程搜�
 
 # 随心记（Android）
 
-一个以 **随手记录 + 紧凑周课表 + 提醒 + 本地备份 + 桌面小组件** 为核心的原生 Android 应用。当前代码版本 **v1.3.3**（versionCode 7）；Release 下载页可能仍为上一个已发布版本。
+一个以 **随手记录 + 学期课表 + 提醒 + 本地备份 + 桌面小组件** 为核心的原生 Android 应用。当前应用版本 **v1.4.0**（versionCode 8）。[下载最新正式签名 APK](https://github.com/xiaoiubao1/-/releases/latest/download/suixinji.apk)。
 
 ## v1.3.3 修复
 
